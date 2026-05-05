@@ -1,4 +1,5 @@
 import base64
+import html
 import json
 import os
 import random
@@ -311,6 +312,12 @@ def ss_url(user: dict[str, Any]) -> str:
     encoded = base64.urlsafe_b64encode(userinfo.encode()).decode().rstrip("=")
     name = quote(str(user.get("display_name") or f"user{user['id']}"))
     return f"ss://{encoded}@{get_public_host()}:{user['port']}#{name}"
+
+
+def ss_url_html(user: dict[str, Any]) -> str:
+    url = ss_url(user)
+    escaped = html.escape(url, quote=True)
+    return f'<a href="{escaped}">{escaped}</a>'
 
 
 def create_user(
@@ -776,7 +783,7 @@ def format_user(user: dict[str, Any], include_url: bool = False) -> str:
         f"流量：{traffic_text(user)}"
     )
     if include_url:
-        text += f"\n\nSS 链接：\n<code>{ss_url(user)}</code>"
+        text += f"\n\nSS 链接：\n{ss_url_html(user)}"
     return text
 
 
