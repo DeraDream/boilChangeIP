@@ -78,6 +78,7 @@ check_dependencies() {
   command -v git >/dev/null 2>&1 || MISSING_DEPS+=("git")
   command -v python3 >/dev/null 2>&1 || MISSING_DEPS+=("python3")
   command -v systemctl >/dev/null 2>&1 || MISSING_DEPS+=("systemctl")
+  command -v sing-box >/dev/null 2>&1 || MISSING_DEPS+=("sing-box")
   command -v jq >/dev/null 2>&1 || MISSING_DEPS+=("jq")
   command -v bc >/dev/null 2>&1 || MISSING_DEPS+=("bc")
   command -v dig >/dev/null 2>&1 || MISSING_DEPS+=("dnsutils/dig")
@@ -95,6 +96,14 @@ check_dependencies() {
     return 0
   fi
   return 1
+}
+
+install_singbox() {
+  if command -v sing-box >/dev/null 2>&1; then
+    return 0
+  fi
+  log_msg "正在安装 sing-box..."
+  bash <(curl -fsSL https://sing-box.app/install.sh)
 }
 
 print_missing_dependencies() {
@@ -122,6 +131,7 @@ ensure_dependencies() {
   }
 
   log_msg "系统依赖安装完成，正在复查..."
+  install_singbox || true
   if check_dependencies; then
     log_msg "依赖复查通过，继续安装。"
     return 0
@@ -133,17 +143,19 @@ ensure_dependencies() {
 }
 
 write_env() {
-  local account password bot_token tg_user_id
+  local account password bot_token tg_user_id ss_public_host
   account="$(prompt_value '请输入 IPPanel 账号')"
   password="$(prompt_value '请输入 IPPanel 密码' 1)"
   bot_token="$(prompt_value 'Telegram Bot Token')"
   tg_user_id="$(prompt_value '请输入 Telegram 用户 ID')"
+  ss_public_host="$(prompt_value '请输入 SS 公网地址或域名，留空自动获取')"
 
   cat > "$ENV_FILE" <<EOF_ENV
 BOT_TOKEN=$bot_token
 ALLOWED_USERS=$tg_user_id
 ACCOUNT=$account
 PASSWORD=$password
+SS_PUBLIC_HOST=$ss_public_host
 EOF_ENV
   chmod 600 "$ENV_FILE"
 }
@@ -178,7 +190,11 @@ EOF_SERVICE
 
 install_global_menu() {
   ln -sf "$APP_DIR/scripts/boiltg.sh" "$BIN_FILE"
-  chmod +x "$APP_DIR/scripts/boiltg.sh" "$APP_DIR/monitor_ip.sh"
+  chmod +x "$APP_DIR/scripts/boiltg.sh" "$APP_DIR/monitor_ip.sh" "$APP_DIR/scripts/ss_cli.py"
+}
+
+init_singbox() {
+  "$APP_DIR/.venv/bin/python" -c "import ss_manager; ss_manager.init_db(); ss_manager.render_singbox_config(); ss_manager.restart_singbox()"
 }
 
 need_root
@@ -186,6 +202,7 @@ ensure_dependencies
 write_env
 install_python_deps
 install_global_menu
+init_singbox
 install_service
 
 echo "安装完成。请使用 'boiltg' 打开全局菜单。"

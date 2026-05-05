@@ -55,6 +55,7 @@ check_runtime_dependencies() {
   command -v curl >/dev/null 2>&1 || RUNTIME_MISSING+=("curl")
   command -v git >/dev/null 2>&1 || RUNTIME_MISSING+=("git")
   command -v python3 >/dev/null 2>&1 || RUNTIME_MISSING+=("python3")
+  command -v sing-box >/dev/null 2>&1 || RUNTIME_MISSING+=("sing-box")
   command -v jq >/dev/null 2>&1 || RUNTIME_MISSING+=("jq")
   command -v bc >/dev/null 2>&1 || RUNTIME_MISSING+=("bc")
   command -v dig >/dev/null 2>&1 || RUNTIME_MISSING+=("dnsutils/dig")
@@ -69,6 +70,14 @@ check_runtime_dependencies() {
   fi
 
   [ "${#RUNTIME_MISSING[@]}" -eq 0 ]
+}
+
+install_singbox() {
+  if command -v sing-box >/dev/null 2>&1; then
+    return 0
+  fi
+  log_msg "正在安装 sing-box..."
+  bash <(curl -fsSL https://sing-box.app/install.sh) 2>&1 | tee -a "$UPDATE_LOG_FILE"
 }
 
 install_runtime_dependencies() {
@@ -107,6 +116,7 @@ ensure_runtime_dependencies() {
     log_msg "无法自动安装系统依赖，未识别包管理器：$pkg_manager"
     return 1
   }
+  install_singbox || true
 
   if check_runtime_dependencies; then
     log_msg "系统依赖复查通过。"
@@ -189,8 +199,11 @@ update_script() {
     "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt" 2>&1 | tee -a "$UPDATE_LOG_FILE"
 
     log_msg "正在刷新可执行权限和全局命令。"
-    chmod +x "$APP_DIR/scripts/boiltg.sh" "$APP_DIR/monitor_ip.sh" "$APP_DIR/install.sh"
+    chmod +x "$APP_DIR/scripts/boiltg.sh" "$APP_DIR/monitor_ip.sh" "$APP_DIR/install.sh" "$APP_DIR/scripts/ss_cli.py"
     ln -sf "$APP_DIR/scripts/boiltg.sh" /usr/local/bin/boiltg
+
+    log_msg "正在刷新 sing-box 配置。"
+    "$APP_DIR/.venv/bin/python" -c "import ss_manager; ss_manager.init_db(); ss_manager.render_singbox_config(); ss_manager.restart_singbox()" 2>&1 | tee -a "$UPDATE_LOG_FILE"
 
     log_msg "正在刷新 systemd 服务文件。"
     refresh_service_file
@@ -228,6 +241,7 @@ modify_config() {
     echo "2. 修改 Telegram 用户 ID"
     echo "3. 修改 IPPanel 账号"
     echo "4. 修改 IPPanel 密码"
+    echo "5. 修改 SS 公网地址/域名"
     echo "0. 返回"
     read -r -p "请选择： " choice
 
@@ -257,6 +271,12 @@ modify_config() {
         restart_service
         echo "已保存配置并重启服务。"
         ;;
+      5)
+        read -r -p "请输入新的 SS 公网地址/域名，留空自动获取： " value
+        set_env_value "SS_PUBLIC_HOST" "$value"
+        restart_service
+        echo "已保存配置并重启服务。"
+        ;;
       0) return ;;
       *) echo "无效选择。" ;;
     esac
@@ -276,6 +296,22 @@ uninstall_script() {
   esac
 }
 
+add_ss_user() {
+  "$APP_DIR/.venv/bin/python" "$APP_DIR/scripts/ss_cli.py" add
+}
+
+manage_ss_users() {
+  "$APP_DIR/.venv/bin/python" "$APP_DIR/scripts/ss_cli.py" list
+}
+
+delete_ss_user() {
+  "$APP_DIR/.venv/bin/python" "$APP_DIR/scripts/ss_cli.py" delete
+}
+
+reset_runtime_data() {
+  "$APP_DIR/.venv/bin/python" "$APP_DIR/scripts/ss_cli.py" reset
+}
+
 main_menu() {
   while true; do
     echo
@@ -284,6 +320,10 @@ main_menu() {
     echo "2. 修改配置"
     echo "3. 卸载脚本"
     echo "4. 查看脚本状态"
+    echo "5. 新增用户"
+    echo "6. 用户管理"
+    echo "7. 删除用户"
+    echo "8. 初始化脚本"
     echo "0. 退出"
     read -r -p "请选择： " choice
 
@@ -292,6 +332,10 @@ main_menu() {
       2) modify_config ;;
       3) uninstall_script ;;
       4) service_status ;;
+      5) add_ss_user ;;
+      6) manage_ss_users ;;
+      7) delete_ss_user ;;
+      8) reset_runtime_data ;;
       0) exit 0 ;;
       *) echo "无效选择。" ;;
     esac

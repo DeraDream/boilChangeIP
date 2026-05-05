@@ -2,6 +2,7 @@ import html
 import subprocess
 import threading
 import time
+from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Dict
@@ -18,6 +19,7 @@ from telebot.types import (
 
 from api_client import IPPanelClient
 from config import MONITOR_SCRIPT, get_version, load_env, parse_allowed_users
+import ss_manager
 
 
 env = load_env()
@@ -31,12 +33,21 @@ if not BOT_TOKEN:
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
 api = IPPanelClient(ACCOUNT, PASSWORD)
+ss_manager.init_db()
 
 user_states: Dict[int, Dict[str, Any]] = {}
 
 BTN_STATUS = "1. Bot 状态"
 BTN_DEVICES = "2. 获取列表/更换 IP"
 BTN_QUALITY = "3. 获取当前 IP 质量"
+BTN_CREATE_USER = "4. 生成用户"
+BTN_USER_MGMT = "5. 用户管理"
+BTN_DELETE_USER = "6. 删除用户"
+BTN_REQUEST_SS = "申请 SS 链接"
+BTN_MY_SS = "我的链接"
+BTN_CHANGE_IP = "更换 IP"
+
+admin_states: Dict[int, Dict[str, Any]] = {}
 
 
 def main_menu() -> InlineKeyboardMarkup:
@@ -45,6 +56,9 @@ def main_menu() -> InlineKeyboardMarkup:
         InlineKeyboardButton(BTN_STATUS, callback_data="menu_status"),
         InlineKeyboardButton(BTN_DEVICES, callback_data="menu_devices"),
         InlineKeyboardButton(BTN_QUALITY, callback_data="menu_quality"),
+        InlineKeyboardButton(BTN_CREATE_USER, callback_data="menu_create_user"),
+        InlineKeyboardButton(BTN_USER_MGMT, callback_data="menu_user_mgmt"),
+        InlineKeyboardButton(BTN_DELETE_USER, callback_data="menu_delete_user"),
     )
     return markup
 
@@ -55,8 +69,31 @@ def reply_menu() -> ReplyKeyboardMarkup:
         KeyboardButton(BTN_STATUS),
         KeyboardButton(BTN_DEVICES),
         KeyboardButton(BTN_QUALITY),
+        KeyboardButton(BTN_CREATE_USER),
+        KeyboardButton(BTN_USER_MGMT),
+        KeyboardButton(BTN_DELETE_USER),
     )
     return markup
+
+
+def guest_menu() -> ReplyKeyboardMarkup:
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    markup.add(KeyboardButton(BTN_REQUEST_SS))
+    return markup
+
+
+def user_menu() -> ReplyKeyboardMarkup:
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    markup.add(KeyboardButton(BTN_MY_SS), KeyboardButton(BTN_CHANGE_IP))
+    return markup
+
+
+def is_admin(user_id: int) -> bool:
+    return user_id in ALLOWED_USERS
+
+
+def is_ss_user(user_id: int) -> bool:
+    return ss_manager.get_user_by_tg(user_id) is not None
 
 
 def device_markup(devices: list[dict[str, Any]]) -> InlineKeyboardMarkup:
@@ -93,6 +130,27 @@ def check_permission(func: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
+def check_admin(func: Callable[..., Any]) -> Callable[..., Any]:
+    return check_permission(func)
+
+
+def check_ss_or_admin(func: Callable[..., Any]) -> Callable[..., Any]:
+    @wraps(func)
+    def wrapper(message_or_call, *args, **kwargs):
+        user_id = message_or_call.from_user.id
+        chat_id = (
+            message_or_call.message.chat.id
+            if hasattr(message_or_call, "message")
+            else message_or_call.chat.id
+        )
+        if is_admin(user_id) or is_ss_user(user_id):
+            return func(message_or_call, *args, **kwargs)
+        bot.send_message(chat_id, f"你还没有权限。你的 ID 是：{user_id}", reply_markup=guest_menu())
+        return None
+
+    return wrapper
+
+
 def safe_edit(call, text: str, reply_markup=None, parse_mode=None):
     try:
         bot.edit_message_text(
@@ -112,29 +170,27 @@ def safe_edit(call, text: str, reply_markup=None, parse_mode=None):
 
 
 @bot.message_handler(commands=["start", "help", "menu"])
-@check_permission
 def send_welcome(message):
-    bot.send_message(
-        message.chat.id,
-        "Boil Change IP Bot 已在线，底部菜单已启用。",
-        reply_markup=reply_menu(),
-    )
-    bot.send_message(
-        message.chat.id,
-        "也可以在这里选择操作：",
-        reply_markup=main_menu(),
-    )
+    user_id = message.from_user.id
+    if is_admin(user_id):
+        bot.send_message(message.chat.id, "管理员菜单已启用。", reply_markup=reply_menu())
+        bot.send_message(message.chat.id, "也可以在这里选择操作：", reply_markup=main_menu())
+        return
+    if is_ss_user(user_id):
+        bot.send_message(message.chat.id, "你的 SS 用户菜单已启用。", reply_markup=user_menu())
+        return
+    bot.send_message(message.chat.id, f"你的 ID 是：{user_id}", reply_markup=guest_menu())
 
 
 @bot.message_handler(commands=["list"])
-@check_permission
+@check_admin
 def handle_list(message):
     bot.reply_to(message, "正在获取设备数据，请稍候...")
     bot.send_message(message.chat.id, api.get_formatted_status())
 
 
 @bot.message_handler(commands=["ip_change"])
-@check_permission
+@check_admin
 def handle_ip_change(message):
     send_devices_for_change(message.chat.id)
 
@@ -149,19 +205,19 @@ def status_text() -> str:
 
 
 @bot.message_handler(func=lambda message: message.text == BTN_STATUS)
-@check_permission
+@check_admin
 def handle_reply_status(message):
     bot.send_message(message.chat.id, status_text(), reply_markup=reply_menu())
 
 
 @bot.message_handler(func=lambda message: message.text == BTN_DEVICES)
-@check_permission
+@check_admin
 def handle_reply_devices(message):
     send_devices_for_change(message.chat.id)
 
 
 @bot.message_handler(func=lambda message: message.text == BTN_QUALITY)
-@check_permission
+@check_admin
 def handle_reply_quality(message):
     bot.send_message(
         message.chat.id,
@@ -169,6 +225,127 @@ def handle_reply_quality(message):
         reply_markup=reply_menu(),
     )
     send_ip_quality(message.chat.id)
+
+
+@bot.message_handler(commands=["my_ss"])
+@check_ss_or_admin
+def handle_my_ss(message):
+    send_my_ss(message.chat.id, message.from_user.id)
+
+
+@bot.message_handler(func=lambda message: message.text == BTN_MY_SS)
+@check_ss_or_admin
+def handle_reply_my_ss(message):
+    send_my_ss(message.chat.id, message.from_user.id)
+
+
+@bot.message_handler(func=lambda message: message.text == BTN_CHANGE_IP)
+@check_ss_or_admin
+def handle_reply_user_change_ip(message):
+    send_devices_for_change(message.chat.id)
+
+
+@bot.message_handler(func=lambda message: message.text == BTN_REQUEST_SS)
+def handle_request_button(message):
+    handle_ss_request(message)
+
+
+@bot.message_handler(func=lambda message: message.text == BTN_CREATE_USER)
+@check_admin
+def handle_reply_create_user(message):
+    bot.send_message(message.chat.id, "请让用户点击 /start 后申请 SS 链接，或发送用户 TG ID 手动创建。")
+
+
+@bot.message_handler(func=lambda message: message.text == BTN_USER_MGMT)
+@check_admin
+def handle_reply_user_mgmt(message):
+    send_user_management(message.chat.id)
+
+
+@bot.message_handler(func=lambda message: message.text == BTN_DELETE_USER)
+@check_admin
+def handle_reply_delete_user(message):
+    send_delete_users(message.chat.id)
+
+
+def send_my_ss(chat_id: int, tg_user_id: int):
+    user = ss_manager.get_user_by_tg(tg_user_id)
+    if not user and is_admin(tg_user_id):
+        bot.send_message(chat_id, "管理员没有绑定普通 SS 用户。")
+        return
+    if not user:
+        bot.send_message(chat_id, f"你还没有权限。你的 ID 是：{tg_user_id}", reply_markup=guest_menu())
+        return
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(InlineKeyboardButton("更换 IP", callback_data="user_change_ip"))
+    bot.send_message(chat_id, ss_manager.format_user(user, include_url=True), parse_mode="HTML", reply_markup=markup)
+
+
+def handle_ss_request(message):
+    user_id = message.from_user.id
+    if is_admin(user_id):
+        bot.send_message(message.chat.id, "你是管理员，无需申请。", reply_markup=reply_menu())
+        return
+    if is_ss_user(user_id):
+        bot.send_message(message.chat.id, "你已经有权限，请点击“我的链接”。", reply_markup=user_menu())
+        return
+
+    username = ss_manager.parse_tg_username(message.from_user)
+    req = ss_manager.create_or_update_request(user_id, username)
+    bot.send_message(message.chat.id, "申请已提交，请等待管理员审核。", reply_markup=guest_menu())
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("接受", callback_data=f"ssreq_accept_{user_id}"),
+        InlineKeyboardButton("拒绝", callback_data=f"ssreq_reject_{user_id}"),
+    )
+    text = f"用户 {html.escape(username)} 申请 SS 链接\nID：{user_id}"
+    for admin_id in ALLOWED_USERS:
+        bot.send_message(admin_id, text, reply_markup=markup)
+
+
+def approval_markup(tg_user_id: int) -> InlineKeyboardMarkup:
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("确认创建", callback_data=f"draft_confirm_{tg_user_id}"),
+        InlineKeyboardButton("修改端口", callback_data=f"draft_edit_port_{tg_user_id}"),
+        InlineKeyboardButton("修改用户名", callback_data=f"draft_edit_name_{tg_user_id}"),
+        InlineKeyboardButton("修改到期日", callback_data=f"draft_edit_expire_{tg_user_id}"),
+        InlineKeyboardButton("修改流量", callback_data=f"draft_edit_traffic_{tg_user_id}"),
+        InlineKeyboardButton("修改速率", callback_data=f"draft_edit_speed_{tg_user_id}"),
+        InlineKeyboardButton("取消", callback_data=f"draft_cancel_{tg_user_id}"),
+    )
+    return markup
+
+
+def send_draft(chat_id: int, draft: ss_manager.ApprovalDraft):
+    bot.send_message(chat_id, draft.as_text(), reply_markup=approval_markup(draft.tg_user_id))
+
+
+def send_user_management(chat_id: int):
+    users = ss_manager.list_users()
+    if not users:
+        bot.send_message(chat_id, "暂无用户。")
+        return
+    for user in users:
+        markup = InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            InlineKeyboardButton("修改到期日", callback_data=f"user_edit_expire_{user['id']}"),
+            InlineKeyboardButton("修改流量", callback_data=f"user_edit_traffic_{user['id']}"),
+            InlineKeyboardButton("修改速率", callback_data=f"user_edit_speed_{user['id']}"),
+            InlineKeyboardButton("删除用户", callback_data=f"user_delete_{user['id']}"),
+        )
+        bot.send_message(chat_id, ss_manager.format_user(user), reply_markup=markup)
+
+
+def send_delete_users(chat_id: int):
+    users = ss_manager.list_users()
+    if not users:
+        bot.send_message(chat_id, "暂无用户。")
+        return
+    markup = InlineKeyboardMarkup(row_width=1)
+    for user in users:
+        markup.add(InlineKeyboardButton(f"{user['id']}. {user['display_name']} | {user['tg_user_id']}", callback_data=f"user_delete_{user['id']}"))
+    bot.send_message(chat_id, "请选择要删除的用户：", reply_markup=markup)
 
 
 def send_devices_for_change(chat_id: int, call=None):
@@ -194,29 +371,57 @@ def send_devices_for_change(chat_id: int, call=None):
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "menu_status")
-@check_permission
+@check_admin
 def handle_menu_status(call):
     safe_edit(call, status_text(), reply_markup=main_menu())
     bot.answer_callback_query(call.id)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "menu_devices")
-@check_permission
+@check_admin
 def handle_menu_devices(call):
     bot.answer_callback_query(call.id, "正在获取设备...")
     send_devices_for_change(call.message.chat.id, call=call)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "menu_quality")
-@check_permission
+@check_admin
 def handle_menu_quality(call):
     bot.answer_callback_query(call.id, "正在检测 IP 质量...")
     safe_edit(call, "正在检测当前 IP 质量，可能需要等待一分钟...")
     send_ip_quality(call.message.chat.id)
 
 
+@bot.callback_query_handler(func=lambda call: call.data == "menu_create_user")
+@check_admin
+def handle_menu_create_user(call):
+    bot.answer_callback_query(call.id)
+    safe_edit(call, "请让用户点击 /start 后申请 SS 链接，或发送用户 TG ID 手动创建。", reply_markup=main_menu())
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "menu_user_mgmt")
+@check_admin
+def handle_menu_user_mgmt(call):
+    bot.answer_callback_query(call.id)
+    send_user_management(call.message.chat.id)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "menu_delete_user")
+@check_admin
+def handle_menu_delete_user(call):
+    bot.answer_callback_query(call.id)
+    send_delete_users(call.message.chat.id)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "user_change_ip")
+@check_ss_or_admin
+def handle_user_change_ip(call):
+    bot.answer_callback_query(call.id, "正在获取设备...")
+    send_devices_for_change(call.message.chat.id, call=call)
+
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith("change_now_"))
-@check_permission
+@check_ss_or_admin
 def handle_change_now(call):
     chat_id = call.message.chat.id
     state = user_states.get(chat_id) or {}
@@ -234,6 +439,160 @@ def handle_change_now(call):
     safe_edit(call, f"正在为 {device['name']} 更换 IP...")
     execute_ip_change(chat_id, device)
     user_states.pop(chat_id, None)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("ssreq_accept_"))
+@check_admin
+def handle_request_accept(call):
+    tg_user_id = int(call.data.rsplit("_", 1)[1])
+    req = ss_manager.get_request(tg_user_id)
+    if not req:
+        bot.answer_callback_query(call.id, "申请不存在。", show_alert=True)
+        return
+    draft = ss_manager.make_draft(tg_user_id, req.get("tg_username") or "未知")
+    admin_states[call.from_user.id] = {"mode": "draft", "draft": draft}
+    bot.answer_callback_query(call.id)
+    send_draft(call.message.chat.id, draft)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("ssreq_reject_"))
+@check_admin
+def handle_request_reject(call):
+    tg_user_id = int(call.data.rsplit("_", 1)[1])
+    ss_manager.mark_request(tg_user_id, "rejected", call.from_user.id)
+    bot.answer_callback_query(call.id, "已拒绝。")
+    safe_edit(call, f"已拒绝用户 {tg_user_id} 的 SS 申请。")
+    try:
+        bot.send_message(tg_user_id, "你的 SS 链接申请已被拒绝。", reply_markup=guest_menu())
+    except Exception:
+        pass
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("draft_"))
+@check_admin
+def handle_draft_actions(call):
+    parts = call.data.split("_")
+    action = parts[1]
+    tg_user_id = int(parts[-1])
+    state = admin_states.get(call.from_user.id) or {}
+    draft = state.get("draft")
+    if not draft or draft.tg_user_id != tg_user_id:
+        bot.answer_callback_query(call.id, "草稿已过期，请重新接受申请。", show_alert=True)
+        return
+
+    if action == "confirm":
+        user = ss_manager.create_user(
+            tg_user_id=draft.tg_user_id,
+            tg_username=draft.tg_username,
+            display_name=draft.display_name,
+            port=draft.port,
+            expire_at=draft.expire_at,
+            traffic_limit_gb=draft.traffic_limit_gb,
+            speed_limit=draft.speed_limit,
+        )
+        admin_states.pop(call.from_user.id, None)
+        bot.answer_callback_query(call.id, "已创建。")
+        safe_edit(call, "已创建用户：\n\n" + ss_manager.format_user(user))
+        try:
+            bot.send_message(tg_user_id, "你的 SS 链接已开通，请点击底部“我的链接”查看。", reply_markup=user_menu())
+        except Exception:
+            pass
+        return
+
+    if action == "cancel":
+        admin_states.pop(call.from_user.id, None)
+        bot.answer_callback_query(call.id, "已取消。")
+        safe_edit(call, "已取消创建。")
+        return
+
+    field = parts[2]
+    admin_states[call.from_user.id] = {"mode": f"draft_edit_{field}", "draft": draft}
+    prompt = {
+        "port": "请输入新端口：",
+        "name": "请输入自定义用户名/显示名：",
+        "expire": "请输入到期日，例如 2026-06-05 或 30d：",
+        "traffic": "请输入月流量 GB，例如 100：",
+        "speed": "请输入速率，例如 50Mbps；输入 0 表示不限速：",
+    }.get(field, "请输入新值：")
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id, prompt)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("user_edit_") or call.data.startswith("user_delete_"))
+@check_admin
+def handle_user_actions(call):
+    if call.data.startswith("user_delete_"):
+        user_id = int(call.data.rsplit("_", 1)[1])
+        user = ss_manager.delete_user(user_id)
+        bot.answer_callback_query(call.id, "已删除。" if user else "用户不存在。")
+        safe_edit(call, f"已删除用户：{user['display_name']}" if user else "用户不存在。")
+        return
+
+    _prefix, _edit, field, raw_user_id = call.data.split("_")
+    user_id = int(raw_user_id)
+    admin_states[call.from_user.id] = {"mode": f"user_edit_{field}", "user_id": user_id}
+    prompt = {
+        "expire": "请输入新的到期日，例如 2026-06-05 或 30d：",
+        "traffic": "请输入新的月流量 GB，例如 100：",
+        "speed": "请输入新的速率，例如 50Mbps；输入 0 表示不限速：",
+    }.get(field, "请输入新值：")
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id, prompt)
+
+
+def parse_expire_value(value: str) -> str:
+    value = value.strip()
+    if value.endswith("d") and value[:-1].isdigit():
+        return (datetime.now() + timedelta(days=int(value[:-1]))).strftime("%Y-%m-%d")
+    datetime.strptime(value, "%Y-%m-%d")
+    return value
+
+
+@bot.message_handler(func=lambda message: message.from_user.id in admin_states)
+@check_admin
+def handle_admin_state_input(message):
+    state = admin_states.get(message.from_user.id) or {}
+    mode = state.get("mode", "")
+    value = (message.text or "").strip()
+    try:
+        if mode.startswith("draft_edit_"):
+            draft = state["draft"]
+            field = mode.replace("draft_edit_", "")
+            if field == "port":
+                port = int(value)
+                if port in ss_manager.used_ports() or not ss_manager.is_port_free(port):
+                    bot.send_message(message.chat.id, "端口不可用，请重新输入。")
+                    return
+                draft.port = port
+            elif field == "name":
+                draft.display_name = value or draft.display_name
+            elif field == "expire":
+                draft.expire_at = parse_expire_value(value)
+            elif field == "traffic":
+                draft.traffic_limit_gb = int(value)
+            elif field == "speed":
+                draft.speed_limit = "不限速" if value in ("0", "不限速", "") else value
+            admin_states[message.from_user.id] = {"mode": "draft", "draft": draft}
+            send_draft(message.chat.id, draft)
+            return
+
+        if mode.startswith("user_edit_"):
+            user_id = int(state["user_id"])
+            field = mode.replace("user_edit_", "")
+            updates: dict[str, Any] = {}
+            if field == "expire":
+                updates["expire_at"] = parse_expire_value(value)
+            elif field == "traffic":
+                updates["traffic_limit_gb"] = int(value)
+            elif field == "speed":
+                updates["speed_limit"] = "不限速" if value in ("0", "不限速", "") else value
+            ss_manager.update_user(user_id, **updates)
+            admin_states.pop(message.from_user.id, None)
+            user = ss_manager.get_user(user_id)
+            bot.send_message(message.chat.id, "已更新用户：\n\n" + ss_manager.format_user(user))
+            return
+    except Exception as exc:
+        bot.send_message(message.chat.id, f"输入无效：{exc}")
 
 
 def execute_ip_change(chat_id: int, device: dict[str, Any]):
@@ -372,8 +731,9 @@ def send_quality_images(chat_id: int, png_path: Path):
 
 def run_scheduler():
     while True:
+        ss_manager.disable_expired_users()
         schedule.run_pending()
-        time.sleep(1)
+        time.sleep(60)
 
 
 if __name__ == "__main__":
