@@ -147,6 +147,32 @@ WantedBy=multi-user.target
 EOF_SERVICE
 }
 
+run_maintenance() {
+  log_msg "正在检查并补齐系统依赖。"
+  ensure_runtime_dependencies
+
+  log_msg "正在安装/更新 Python 依赖。"
+  if [ ! -x "$APP_DIR/.venv/bin/pip" ]; then
+    log_msg "未找到虚拟环境，正在重新创建 .venv。"
+    python3 -m venv "$APP_DIR/.venv" 2>&1 | tee -a "$UPDATE_LOG_FILE"
+  fi
+  "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt" 2>&1 | tee -a "$UPDATE_LOG_FILE"
+
+  log_msg "正在刷新可执行权限和全局命令。"
+  chmod +x "$APP_DIR/scripts/boiltg.sh" "$APP_DIR/monitor_ip.sh" "$APP_DIR/install.sh" "$APP_DIR/scripts/ss_cli.py"
+  ln -sf "$APP_DIR/scripts/boiltg.sh" /usr/local/bin/boiltg
+
+  log_msg "正在刷新 sing-box 配置。"
+  "$APP_DIR/.venv/bin/python" -c "import ss_manager; ss_manager.init_db(); ss_manager.render_singbox_config(); ss_manager.restart_singbox()" 2>&1 | tee -a "$UPDATE_LOG_FILE"
+
+  log_msg "正在刷新 systemd 服务文件。"
+  refresh_service_file
+  systemctl enable "$APP_NAME" >/dev/null 2>&1 || true
+
+  log_msg "正在重启服务。"
+  restart_service
+}
+
 service_status() {
   echo "本地版本：$(local_version)"
   echo
@@ -189,34 +215,15 @@ update_script() {
     fi
     rm -f "$env_backup"
 
-    log_msg "正在检查并补齐系统依赖。"
-    ensure_runtime_dependencies
-
-    log_msg "正在安装/更新 Python 依赖。"
-    if [ ! -x "$APP_DIR/.venv/bin/pip" ]; then
-      log_msg "未找到虚拟环境，正在重新创建 .venv。"
-      python3 -m venv "$APP_DIR/.venv" 2>&1 | tee -a "$UPDATE_LOG_FILE"
-    fi
-    "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt" 2>&1 | tee -a "$UPDATE_LOG_FILE"
-
-    log_msg "正在刷新可执行权限和全局命令。"
-    chmod +x "$APP_DIR/scripts/boiltg.sh" "$APP_DIR/monitor_ip.sh" "$APP_DIR/install.sh" "$APP_DIR/scripts/ss_cli.py"
-    ln -sf "$APP_DIR/scripts/boiltg.sh" /usr/local/bin/boiltg
-
-    log_msg "正在刷新 sing-box 配置。"
-    "$APP_DIR/.venv/bin/python" -c "import ss_manager; ss_manager.init_db(); ss_manager.render_singbox_config(); ss_manager.restart_singbox()" 2>&1 | tee -a "$UPDATE_LOG_FILE"
-
-    log_msg "正在刷新 systemd 服务文件。"
-    refresh_service_file
-    systemctl enable "$APP_NAME" >/dev/null 2>&1 || true
-
-    log_msg "正在重启服务。"
-    restart_service
+    run_maintenance
 
     log_msg "更新完成。当前版本：$(local_version)。服务已重启。"
     log_msg "更新日志已保存到：$UPDATE_LOG_FILE"
   else
-    log_msg "当前已是最新版本，无需更新。"
+    log_msg "当前已是最新版本，开始执行依赖检查和运行环境维护。"
+    run_maintenance
+    log_msg "维护完成。当前版本：$(local_version)。服务已重启。"
+    log_msg "维护日志已保存到：$UPDATE_LOG_FILE"
   fi
 }
 
