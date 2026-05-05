@@ -131,7 +131,7 @@ Bot 支持以下命令：
 
 - `Bot 状态`：查看 Bot 是否运行、当前版本、授权用户和 IPPanel 账号。
 - `获取列表/更换 IP`：显示设备名称和当前 IP，点击设备按钮后立即换 IP。
-- `获取当前 IP 质量`：运行 IP 质量检测脚本，生成 PNG 图片并发送到 Telegram。
+- `获取当前 IP 质量`：运行完整 IP 质量检测脚本，生成 PNG 图片并发送到 Telegram。
 
 这些按钮会同时出现在聊天消息里的内联菜单，以及 Telegram 输入框底部的自定义键盘中。
 
@@ -140,7 +140,7 @@ Bot 支持以下命令：
 检测脚本会执行：
 
 ```bash
-bash <(curl -sL IP.Check.Place) -4 -E
+bash <(curl -Ls https://IP.Check.Place)
 ```
 
 执行流程：

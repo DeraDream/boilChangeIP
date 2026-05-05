@@ -351,7 +351,7 @@ def send_quality_images(chat_id: int, png_path: Path):
         total = len(generated_paths)
 
         for idx, image_path in enumerate(generated_paths, start=1):
-            caption = "当前 IP 质量报告" if total == 1 else f"当前 IP 质量报告（{idx}/{total}）"
+            caption = "当前 IP 质量完整报告" if total == 1 else f"当前 IP 质量完整报告（{idx}/{total}）"
             try:
                 with image_path.open("rb") as photo:
                     bot.send_photo(chat_id, photo, caption=caption)

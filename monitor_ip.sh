@@ -145,11 +145,11 @@ send_telegram() {
   curl -fsS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendPhoto" \
     -F chat_id="${TG_CHAT_ID}" \
     -F parse_mode="HTML" \
-    -F caption="<b>IP 质量报告</b>
+    -F caption="<b>IP 质量完整报告</b>
 旧 IP：<code>${old_ip:-无}</code>
 新 IP：<code>${current_ip}</code>
 时间：$(date '+%Y-%m-%d %H:%M:%S')
-参数：<code>-4 -E</code>" \
+命令：<code>bash &lt;(curl -Ls https://IP.Check.Place)</code>" \
     -F photo="@${png_file}" >/dev/null
 }
 
@@ -186,9 +186,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-log "执行 IP.Check.Place -4 -E"
+log "执行 https://IP.Check.Place 完整检测"
 set +e
-bash <(curl -fsSL IP.Check.Place) -4 -E > "$ANSI_FILE" 2>&1
+bash <(curl -fsSL https://IP.Check.Place) > "$ANSI_FILE" 2>&1
 CHECK_STATUS=$?
 set -e
 
