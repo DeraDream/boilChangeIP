@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict
 
 import schedule
 import telebot
+from telebot.apihelper import ApiTelegramException
 from telebot.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -307,14 +308,66 @@ def send_ip_quality(chat_id: int):
         bot.send_message(chat_id, "IP 质量检测已结束，但未生成 PNG 图片。")
         return
 
+    send_quality_images(chat_id, png_path)
+
+
+def split_image_for_telegram(png_path: Path) -> list[Path]:
+    from PIL import Image
+
+    output_paths: list[Path] = []
+    with Image.open(png_path) as image:
+        image = image.convert("RGB")
+        width, height = image.size
+
+        if width > 4096:
+            new_height = max(1, int(height * (4096 / width)))
+            image = image.resize((4096, new_height))
+            width, height = image.size
+
+        max_chunk_height = max(1000, min(4000, 9000 - width))
+        if height <= max_chunk_height and width + height < 9500:
+            fixed_path = png_path.with_name(f"{png_path.stem}_telegram.png")
+            image.save(fixed_path, "PNG")
+            return [fixed_path]
+
+        index = 1
+        top = 0
+        while top < height:
+            bottom = min(height, top + max_chunk_height)
+            chunk = image.crop((0, top, width, bottom))
+            chunk_path = png_path.with_name(f"{png_path.stem}_part_{index}.png")
+            chunk.save(chunk_path, "PNG")
+            output_paths.append(chunk_path)
+            top = bottom
+            index += 1
+
+    return output_paths
+
+
+def send_quality_images(chat_id: int, png_path: Path):
+    generated_paths: list[Path] = []
     try:
-        with png_path.open("rb") as photo:
-            bot.send_photo(chat_id, photo, caption="当前 IP 质量报告")
+        generated_paths = split_image_for_telegram(png_path)
+        total = len(generated_paths)
+
+        for idx, image_path in enumerate(generated_paths, start=1):
+            caption = "当前 IP 质量报告" if total == 1 else f"当前 IP 质量报告（{idx}/{total}）"
+            try:
+                with image_path.open("rb") as photo:
+                    bot.send_photo(chat_id, photo, caption=caption)
+            except ApiTelegramException as exc:
+                if "PHOTO_INVALID_DIMENSIONS" not in str(exc):
+                    raise
+                with image_path.open("rb") as document:
+                    bot.send_document(chat_id, document, caption=f"{caption}（图片尺寸过大，已按文件发送）")
+    except Exception as exc:
+        bot.send_message(chat_id, f"IP 质量图片发送失败：{html.escape(str(exc))}")
     finally:
-        try:
-            png_path.unlink()
-        except OSError:
-            pass
+        for path in [png_path, *generated_paths]:
+            try:
+                path.unlink()
+            except OSError:
+                pass
 
 
 def run_scheduler():

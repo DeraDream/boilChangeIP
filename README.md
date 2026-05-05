@@ -42,6 +42,8 @@ apt-get update && apt-get install -y git curl && mkdir -p /opt && cd /opt && git
 - `iproute2`
 - `netcat-openbsd`
 
+Python 依赖会自动安装，其中包含 `Pillow`，用于把过高的 IP 质量长图切成 Telegram 可发送的多张图片。
+
 安装过程中会依次询问：
 
 - IPPanel 账号
