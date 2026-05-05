@@ -35,14 +35,14 @@ apt-get update && apt-get install -y git curl && mkdir -p /opt && cd /opt && git
 - `python3`
 - `python3-venv`
 - `systemctl`
-- `ansilove`
 - `jq`
 - `bc`
 - `dnsutils`
 - `iproute2`
 - `netcat-openbsd`
+- `fonts-noto-cjk`
 
-Python 依赖会自动安装，其中包含 `Pillow`，用于把过高的 IP 质量长图切成 Telegram 可发送的多张图片。
+Python 依赖会自动安装，其中包含 `Pillow`，用于渲染中文 ANSI 报告，并把过高的 IP 质量长图切成 Telegram 可发送的多张图片。
 
 安装过程中会依次询问：
 

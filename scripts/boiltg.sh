@@ -55,12 +55,14 @@ check_runtime_dependencies() {
   command -v curl >/dev/null 2>&1 || RUNTIME_MISSING+=("curl")
   command -v git >/dev/null 2>&1 || RUNTIME_MISSING+=("git")
   command -v python3 >/dev/null 2>&1 || RUNTIME_MISSING+=("python3")
-  command -v ansilove >/dev/null 2>&1 || RUNTIME_MISSING+=("ansilove")
   command -v jq >/dev/null 2>&1 || RUNTIME_MISSING+=("jq")
   command -v bc >/dev/null 2>&1 || RUNTIME_MISSING+=("bc")
   command -v dig >/dev/null 2>&1 || RUNTIME_MISSING+=("dnsutils/dig")
   command -v ip >/dev/null 2>&1 || RUNTIME_MISSING+=("iproute2/ip")
   command -v nc >/dev/null 2>&1 || RUNTIME_MISSING+=("netcat/nc")
+  if ! find /usr/share/fonts -iname '*Noto*Sans*CJK*' -o -iname '*wqy*' 2>/dev/null | grep -q .; then
+    RUNTIME_MISSING+=("fonts-noto-cjk")
+  fi
 
   if command -v python3 >/dev/null 2>&1; then
     python3 -c "import venv, ensurepip" >/dev/null 2>&1 || RUNTIME_MISSING+=("python3-venv")
@@ -73,18 +75,18 @@ install_runtime_dependencies() {
   local pkg_manager="$1"
   case "$pkg_manager" in
     apt)
-      log_msg "正在安装/补齐系统依赖：python3 python3-venv python3-pip curl git ansilove jq bc dnsutils iproute2 netcat-openbsd"
+      log_msg "正在安装/补齐系统依赖：python3 python3-venv python3-pip curl git jq bc dnsutils iproute2 netcat-openbsd fonts-noto-cjk"
       apt-get update 2>&1 | tee -a "$UPDATE_LOG_FILE"
       DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        python3 python3-venv python3-pip curl git ansilove jq bc dnsutils iproute2 netcat-openbsd 2>&1 | tee -a "$UPDATE_LOG_FILE"
+        python3 python3-venv python3-pip curl git jq bc dnsutils iproute2 netcat-openbsd fonts-noto-cjk 2>&1 | tee -a "$UPDATE_LOG_FILE"
       ;;
     dnf)
-      log_msg "正在安装/补齐系统依赖：python3 python3-pip curl git ansilove jq bc bind-utils iproute nmap-ncat"
-      dnf install -y python3 python3-pip curl git ansilove jq bc bind-utils iproute nmap-ncat 2>&1 | tee -a "$UPDATE_LOG_FILE"
+      log_msg "正在安装/补齐系统依赖：python3 python3-pip curl git jq bc bind-utils iproute nmap-ncat google-noto-sans-cjk-fonts"
+      dnf install -y python3 python3-pip curl git jq bc bind-utils iproute nmap-ncat google-noto-sans-cjk-fonts 2>&1 | tee -a "$UPDATE_LOG_FILE"
       ;;
     yum)
-      log_msg "正在安装/补齐系统依赖：python3 python3-pip curl git ansilove jq bc bind-utils iproute nmap-ncat"
-      yum install -y python3 python3-pip curl git ansilove jq bc bind-utils iproute nmap-ncat 2>&1 | tee -a "$UPDATE_LOG_FILE"
+      log_msg "正在安装/补齐系统依赖：python3 python3-pip curl git jq bc bind-utils iproute nmap-ncat google-noto-sans-cjk-fonts"
+      yum install -y python3 python3-pip curl git jq bc bind-utils iproute nmap-ncat google-noto-sans-cjk-fonts 2>&1 | tee -a "$UPDATE_LOG_FILE"
       ;;
     *)
       return 1

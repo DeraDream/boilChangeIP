@@ -44,7 +44,10 @@ check_quality_dependencies() {
   command -v dig >/dev/null 2>&1 || QUALITY_MISSING+=("dnsutils/dig")
   command -v ip >/dev/null 2>&1 || QUALITY_MISSING+=("iproute2/ip")
   command -v nc >/dev/null 2>&1 || QUALITY_MISSING+=("netcat/nc")
-  command -v ansilove >/dev/null 2>&1 || QUALITY_MISSING+=("ansilove")
+  python3 -c "import PIL" >/dev/null 2>&1 || QUALITY_MISSING+=("python3-pillow")
+  if ! find /usr/share/fonts -iname '*Noto*Sans*CJK*' -o -iname '*wqy*' 2>/dev/null | grep -q .; then
+    QUALITY_MISSING+=("fonts-noto-cjk")
+  fi
 
   [ "${#QUALITY_MISSING[@]}" -eq 0 ]
 }
@@ -53,18 +56,18 @@ install_quality_dependencies() {
   local pkg_manager="$1"
   case "$pkg_manager" in
     apt)
-      log "正在安装 IP 质量检测依赖：curl jq bc dnsutils iproute2 netcat-openbsd ansilove"
+      log "正在安装 IP 质量检测依赖：curl jq bc dnsutils iproute2 netcat-openbsd fonts-noto-cjk"
       apt-get update >> "$LOG_FILE" 2>&1
       DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        curl jq bc dnsutils iproute2 netcat-openbsd ansilove >> "$LOG_FILE" 2>&1
+        curl jq bc dnsutils iproute2 netcat-openbsd fonts-noto-cjk >> "$LOG_FILE" 2>&1
       ;;
     dnf)
-      log "正在安装 IP 质量检测依赖：curl jq bc bind-utils iproute nmap-ncat ansilove"
-      dnf install -y curl jq bc bind-utils iproute nmap-ncat ansilove >> "$LOG_FILE" 2>&1
+      log "正在安装 IP 质量检测依赖：curl jq bc bind-utils iproute nmap-ncat google-noto-sans-cjk-fonts"
+      dnf install -y curl jq bc bind-utils iproute nmap-ncat google-noto-sans-cjk-fonts >> "$LOG_FILE" 2>&1
       ;;
     yum)
-      log "正在安装 IP 质量检测依赖：curl jq bc bind-utils iproute nmap-ncat ansilove"
-      yum install -y curl jq bc bind-utils iproute nmap-ncat ansilove >> "$LOG_FILE" 2>&1
+      log "正在安装 IP 质量检测依赖：curl jq bc bind-utils iproute nmap-ncat google-noto-sans-cjk-fonts"
+      yum install -y curl jq bc bind-utils iproute nmap-ncat google-noto-sans-cjk-fonts >> "$LOG_FILE" 2>&1
       ;;
     *)
       return 1
@@ -121,12 +124,12 @@ render_png() {
   local ansi_file="$1"
   local png_file="$2"
 
-  if ! command -v ansilove >/dev/null 2>&1; then
-    echo "生成 PNG 图片需要安装 ansilove。" >&2
+  if ! python3 -c "import PIL" >/dev/null 2>&1; then
+    echo "生成 PNG 图片需要安装 Python Pillow。" >&2
     return 1
   fi
 
-  ansilove -o "$png_file" "$ansi_file" >/dev/null
+  python3 "$(dirname "$0")/scripts/render_ansi_png.py" "$ansi_file" "$png_file"
 }
 
 send_telegram() {
