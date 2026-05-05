@@ -218,10 +218,9 @@ update_script() {
     fi
     rm -f "$env_backup"
 
-    run_maintenance
-
-    log_msg "更新完成。当前版本：$(local_version)。服务已重启。"
-    log_msg "更新日志已保存到：$UPDATE_LOG_FILE"
+    log_msg "代码已更新，正在切换到新版维护流程。"
+    chmod +x "$APP_DIR/scripts/boiltg.sh"
+    exec "$APP_DIR/scripts/boiltg.sh" --post-update-maintenance
   else
     log_msg "当前已是最新版本，开始执行依赖检查和运行环境维护。"
     run_maintenance
@@ -360,4 +359,13 @@ main_menu() {
 }
 
 need_root
+
+if [ "${1:-}" = "--post-update-maintenance" ]; then
+  log_msg "已进入新版维护流程。"
+  run_maintenance
+  log_msg "更新完成。当前版本：$(local_version)。服务已重启。"
+  log_msg "更新日志已保存到：$UPDATE_LOG_FILE"
+  exit 0
+fi
+
 main_menu
