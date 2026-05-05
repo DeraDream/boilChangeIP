@@ -163,7 +163,10 @@ run_maintenance() {
   ln -sf "$APP_DIR/scripts/boiltg.sh" /usr/local/bin/boiltg
 
   log_msg "正在刷新 sing-box 配置。"
-  "$APP_DIR/.venv/bin/python" -c "import ss_manager; ss_manager.init_db(); ss_manager.render_singbox_config(); ss_manager.restart_singbox()" 2>&1 | tee -a "$UPDATE_LOG_FILE"
+  (
+    cd "$APP_DIR"
+    "$APP_DIR/.venv/bin/python" -c "import ss_manager; ss_manager.init_db(); ss_manager.render_singbox_config(); ss_manager.restart_singbox()"
+  ) 2>&1 | tee -a "$UPDATE_LOG_FILE"
 
   log_msg "正在刷新 systemd 服务文件。"
   refresh_service_file
