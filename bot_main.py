@@ -212,11 +212,11 @@ def status_text() -> str:
         usage = ss_manager.get_user_traffic(user)
         total_in += usage["inbound_bytes"]
         total_out += usage["outbound_bytes"]
-        single = ss_manager.single_way_bytes(usage)
+        billable = ss_manager.billable_bytes(usage)
         traffic_lines.append(
             f"{user['display_name']}  入站 {ss_manager.format_bytes(usage['inbound_bytes'])} / "
             f"出站 {ss_manager.format_bytes(usage['outbound_bytes'])} / "
-            f"单向 {ss_manager.format_bytes(single)}"
+            f"计费 {ss_manager.format_bytes(billable)}"
         )
 
     traffic_text = "\n".join(traffic_lines) if traffic_lines else "暂无用户流量。"
@@ -229,7 +229,7 @@ def status_text() -> str:
         f"SS 用户数：{len(users)}\n"
         f"总入站：{ss_manager.format_bytes(total_in)}\n"
         f"总出站：{ss_manager.format_bytes(total_out)}\n"
-        f"总单向：{ss_manager.format_bytes(max(total_in, total_out))}\n\n"
+        f"总计费：{ss_manager.format_bytes(total_out)}\n\n"
         f"用户流量：\n{traffic_text}"
     )
 

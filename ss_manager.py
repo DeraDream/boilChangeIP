@@ -676,8 +676,8 @@ def read_counter(comment: str) -> int:
     return total
 
 
-def single_way_bytes(usage: dict[str, int]) -> int:
-    return max(usage["inbound_bytes"], usage["outbound_bytes"])
+def billable_bytes(usage: dict[str, int]) -> int:
+    return usage["outbound_bytes"]
 
 
 def traffic_limit_bytes(user: dict[str, Any]) -> int:
@@ -687,12 +687,12 @@ def traffic_limit_bytes(user: dict[str, Any]) -> int:
 def traffic_text(user: dict[str, Any]) -> str:
     usage = get_user_traffic(user)
     limit_bytes = traffic_limit_bytes(user)
-    single_way = max(usage["inbound_bytes"], usage["outbound_bytes"])
-    percent = (single_way / limit_bytes * 100) if limit_bytes else 0
+    billable = billable_bytes(usage)
+    percent = (billable / limit_bytes * 100) if limit_bytes else 0
     return (
         f"入站：{format_bytes(usage['inbound_bytes'])}\n"
         f"出站：{format_bytes(usage['outbound_bytes'])}\n"
-        f"单向计费：{format_bytes(single_way)} / {user['traffic_limit_gb']}GB "
+        f"出站计费：{format_bytes(billable)} / {user['traffic_limit_gb']}GB "
         f"({percent:.2f}%)"
     )
 
@@ -736,7 +736,7 @@ def enforce_traffic_limits() -> int:
             if limit_bytes <= 0:
                 continue
             usage = get_user_traffic(user)
-            if single_way_bytes(usage) < limit_bytes:
+            if billable_bytes(usage) < limit_bytes:
                 continue
             conn.execute(
                 "UPDATE ss_users SET enabled = 0, updated_at = ? WHERE id = ?",
@@ -761,16 +761,16 @@ def traffic_report() -> str:
         usage = get_user_traffic(user)
         total_in += usage["inbound_bytes"]
         total_out += usage["outbound_bytes"]
-        single_way = single_way_bytes(usage)
+        billable = billable_bytes(usage)
         lines.append(
             f"用户 {user['id']}｜{user['display_name']}｜端口 {user['port']}\n"
             f"入站：{format_bytes(usage['inbound_bytes'])}，"
             f"出站：{format_bytes(usage['outbound_bytes'])}，"
-            f"单向：{format_bytes(single_way)} / {user['traffic_limit_gb']}GB"
+            f"出站计费：{format_bytes(billable)} / {user['traffic_limit_gb']}GB"
         )
     lines.insert(1, f"整体入站：{format_bytes(total_in)}")
     lines.insert(2, f"整体出站：{format_bytes(total_out)}")
-    lines.insert(3, f"整体单向：{format_bytes(max(total_in, total_out))}")
+    lines.insert(3, f"整体出站计费：{format_bytes(total_out)}")
     return "\n".join(lines)
 
 
@@ -783,7 +783,7 @@ def format_user(user: dict[str, Any], include_url: bool = False) -> str:
         f"端口：{user['port']}\n"
         f"到期：{user['expire_at']}\n"
         f"到期禁用：{'开启' if int(user.get('expire_disable_enabled', 1)) else '关闭'}\n"
-        f"月流量：{user['traffic_limit_gb']}GB 单向\n"
+        f"月流量：{user['traffic_limit_gb']}GB 出站计费\n"
         f"状态：{'启用' if user['enabled'] else '禁用'}\n"
         f"流量：{traffic_text(user)}"
     )
@@ -815,7 +815,7 @@ class ApprovalDraft:
             f"端口：{self.port}\n"
             f"到期日：{self.expire_at}\n"
             f"到期禁用：{'开启' if self.expire_disable_enabled else '关闭'}\n"
-            f"月流量：{self.traffic_limit_gb}GB 单向\n"
+            f"月流量：{self.traffic_limit_gb}GB 出站计费\n"
             "点击确认后将创建用户并重载 sing-box。"
         )
 
