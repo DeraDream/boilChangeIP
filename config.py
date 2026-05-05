@@ -28,6 +28,27 @@ def load_env() -> Dict[str, str]:
     return data
 
 
+def set_env_value(key: str, value: str) -> None:
+    lines = []
+    found = False
+    if ENV_FILE.exists():
+        lines = ENV_FILE.read_text(encoding="utf-8").splitlines()
+
+    output = []
+    for line in lines:
+        parsed = _parse_env_line(line)
+        if parsed and parsed[0] == key:
+            output.append(f"{key}={value}")
+            found = True
+        else:
+            output.append(line)
+
+    if not found:
+        output.append(f"{key}={value}")
+
+    ENV_FILE.write_text("\n".join(output) + "\n", encoding="utf-8")
+
+
 def parse_allowed_users(raw: str) -> List[int]:
     users: List[int] = []
     for item in raw.replace(";", ",").split(","):

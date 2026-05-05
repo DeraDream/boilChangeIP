@@ -326,6 +326,10 @@ set_tg_notify() {
   "$APP_DIR/.venv/bin/python" "$APP_DIR/scripts/ss_cli.py" notify
 }
 
+bind_domain() {
+  "$APP_DIR/.venv/bin/python" "$APP_DIR/scripts/ss_cli.py" bind-domain
+}
+
 main_menu() {
   while true; do
     echo
@@ -339,6 +343,7 @@ main_menu() {
     echo "7. 删除用户"
     echo "8. 初始化脚本"
     echo "9. TG通知"
+    echo "10. 绑定域名"
     echo "0. 退出"
     read -r -p "请选择： " choice
 
@@ -352,6 +357,7 @@ main_menu() {
       7) delete_ss_user ;;
       8) reset_runtime_data ;;
       9) set_tg_notify ;;
+      10) bind_domain ;;
       0) exit 0 ;;
       *) echo "无效选择。" ;;
     esac

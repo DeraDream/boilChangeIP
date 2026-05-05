@@ -44,6 +44,7 @@ BTN_CREATE_USER = "4. 生成用户"
 BTN_USER_MGMT = "5. 用户管理"
 BTN_DELETE_USER = "6. 删除用户"
 BTN_NOTIFY = "7. TG 通知"
+BTN_BIND_DOMAIN = "8. 绑定域名"
 BTN_REQUEST_SS = "申请 SS 链接"
 BTN_MY_SS = "我的链接"
 BTN_CHANGE_IP = "更换 IP"
@@ -61,6 +62,7 @@ def main_menu() -> InlineKeyboardMarkup:
         InlineKeyboardButton(BTN_USER_MGMT, callback_data="menu_user_mgmt"),
         InlineKeyboardButton(BTN_DELETE_USER, callback_data="menu_delete_user"),
         InlineKeyboardButton(BTN_NOTIFY, callback_data="menu_notify"),
+        InlineKeyboardButton(BTN_BIND_DOMAIN, callback_data="menu_bind_domain"),
     )
     return markup
 
@@ -75,6 +77,7 @@ def reply_menu() -> ReplyKeyboardMarkup:
         KeyboardButton(BTN_USER_MGMT),
         KeyboardButton(BTN_DELETE_USER),
         KeyboardButton(BTN_NOTIFY),
+        KeyboardButton(BTN_BIND_DOMAIN),
     )
     return markup
 
@@ -277,6 +280,12 @@ def handle_reply_notify(message):
     send_notify_menu(message.chat.id)
 
 
+@bot.message_handler(func=lambda message: message.text == BTN_BIND_DOMAIN)
+@check_admin
+def handle_reply_bind_domain(message):
+    start_bind_domain(message.chat.id, message.from_user.id)
+
+
 def send_my_ss(chat_id: int, tg_user_id: int):
     user = ss_manager.get_user_by_tg(tg_user_id)
     if not user and is_admin(tg_user_id):
@@ -378,6 +387,12 @@ def send_notify_menu(chat_id: int):
     bot.send_message(chat_id, f"选择通知时间\n当前：{current}", reply_markup=markup)
 
 
+def start_bind_domain(chat_id: int, admin_id: int):
+    current = ss_manager.get_public_host()
+    admin_states[admin_id] = {"mode": "bind_domain_input"}
+    bot.send_message(chat_id, f"请输入要绑定的域名。\n当前：{current}")
+
+
 def send_devices_for_change(chat_id: int, call=None):
     devices = api.get_devices_list()
     if not devices:
@@ -448,6 +463,13 @@ def handle_menu_delete_user(call):
 def handle_menu_notify(call):
     bot.answer_callback_query(call.id)
     send_notify_menu(call.message.chat.id)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "menu_bind_domain")
+@check_admin
+def handle_menu_bind_domain(call):
+    bot.answer_callback_query(call.id)
+    start_bind_domain(call.message.chat.id, call.from_user.id)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("notify_"))
@@ -635,6 +657,27 @@ def handle_admin_state_input(message):
     mode = state.get("mode", "")
     value = (message.text or "").strip()
     try:
+        if mode == "bind_domain_input":
+            host = ss_manager.normalize_public_host(value)
+            admin_states[message.from_user.id] = {
+                "mode": "bind_domain_confirm",
+                "domain": host,
+            }
+            bot.send_message(
+                message.chat.id,
+                f"确认绑定域名：{host}\n发送 YES 确认，发送其他内容取消。",
+            )
+            return
+
+        if mode == "bind_domain_confirm":
+            host = state["domain"]
+            admin_states.pop(message.from_user.id, None)
+            if value != "YES":
+                bot.send_message(message.chat.id, "已取消绑定域名。")
+                return
+            apply_domain_binding(message.chat.id, host)
+            return
+
         if mode == "manual_tg_id":
             tg_user_id = None if value in ("", "0", "不绑定", "无") else int(value)
             draft = ss_manager.make_manual_draft(tg_user_id)
@@ -683,6 +726,36 @@ def handle_admin_state_input(message):
             return
     except Exception as exc:
         bot.send_message(message.chat.id, f"输入无效：{exc}")
+
+
+def apply_domain_binding(chat_id: int, host: str):
+    ss_manager.bind_public_host(host)
+    success_text = "域名更新成功，所有链接已更新。"
+    bot.send_message(chat_id, success_text)
+    notify_domain_update(success_text)
+    threading.Timer(2, restart_bot_service).start()
+
+
+def notify_domain_update(title: str):
+    users = ss_manager.list_users()
+    if not users:
+        for admin_id in ALLOWED_USERS:
+            bot.send_message(admin_id, title)
+        return
+
+    for user in users:
+        text = f"{title}\n\n{ss_manager.format_user(user, include_url=True)}"
+        tg_user_id = user.get("tg_user_id")
+        targets = [int(tg_user_id)] if tg_user_id else ALLOWED_USERS
+        for target in targets:
+            try:
+                bot.send_message(target, text, parse_mode="HTML")
+            except Exception:
+                pass
+
+
+def restart_bot_service():
+    subprocess.run(["systemctl", "restart", "boil-change-ip"], check=False)
 
 
 def execute_ip_change(chat_id: int, device: dict[str, Any]):

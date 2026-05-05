@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import random
+import re
 import secrets
 import shutil
 import socket
@@ -16,7 +17,7 @@ from urllib.parse import quote
 
 import requests
 
-from config import BASE_DIR, load_env
+from config import BASE_DIR, load_env, set_env_value
 
 
 DATA_DIR = BASE_DIR / "data"
@@ -54,7 +55,7 @@ def init_db() -> None:
             """
             CREATE TABLE IF NOT EXISTS access_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                tg_user_id INTEGER UNIQUE,
+                tg_user_id INTEGER NOT NULL UNIQUE,
                 tg_username TEXT NOT NULL DEFAULT '未知',
                 status TEXT NOT NULL DEFAULT 'pending',
                 created_at TEXT NOT NULL,
@@ -67,7 +68,7 @@ def init_db() -> None:
             """
             CREATE TABLE IF NOT EXISTS ss_users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                tg_user_id INTEGER NOT NULL UNIQUE,
+                tg_user_id INTEGER UNIQUE,
                 tg_username TEXT NOT NULL DEFAULT '未知',
                 display_name TEXT NOT NULL,
                 port INTEGER NOT NULL UNIQUE,
@@ -281,6 +282,28 @@ def get_public_host() -> str:
         except requests.RequestException:
             continue
     return "YOUR_SERVER_IP"
+
+
+def normalize_public_host(value: str) -> str:
+    host = value.strip()
+    host = re.sub(r"^https?://", "", host, flags=re.IGNORECASE)
+    host = host.split("/", 1)[0].strip()
+    host = host.strip("[]")
+    if not host:
+        raise ValueError("域名不能为空。")
+    if any(ch.isspace() for ch in host):
+        raise ValueError("域名不能包含空格。")
+    if ":" in host:
+        raise ValueError("这里只填写域名，不要带端口。")
+    return host
+
+
+def bind_public_host(value: str) -> str:
+    host = normalize_public_host(value)
+    set_env_value("SS_PUBLIC_HOST", host)
+    render_singbox_config()
+    restart_singbox()
+    return host
 
 
 def ss_url(user: dict[str, Any]) -> str:

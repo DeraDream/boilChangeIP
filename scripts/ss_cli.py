@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 import sys
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import ss_manager
+from config import load_env, parse_allowed_users
 
 
 def list_users():
@@ -78,9 +80,52 @@ def notify_time():
     print(f"已设置 TG 流量通知时间：{value}")
 
 
+def notify_domain_update(text: str):
+    env = load_env()
+    token = env.get("BOT_TOKEN", "")
+    admins = parse_allowed_users(env.get("ALLOWED_USERS", ""))
+    if not token:
+        return
+    import telebot
+
+    bot = telebot.TeleBot(token, parse_mode=None)
+    users = ss_manager.list_users()
+    if not users:
+        for admin_id in admins:
+            bot.send_message(admin_id, text)
+        return
+
+    for user in users:
+        message = f"{text}\n\n{ss_manager.format_user(user, include_url=True)}"
+        tg_user_id = user.get("tg_user_id")
+        targets = [int(tg_user_id)] if tg_user_id else admins
+        for target in targets:
+            try:
+                bot.send_message(target, message, parse_mode="HTML")
+            except Exception:
+                pass
+
+
+def bind_domain():
+    current = ss_manager.get_public_host()
+    print(f"当前 SS 域名/IP：{current}")
+    value = input("请输入要绑定的域名：").strip()
+    host = ss_manager.normalize_public_host(value)
+    confirm = input(f"确认绑定域名 {host}？输入 YES 确认：").strip()
+    if confirm != "YES":
+        print("已取消绑定域名。")
+        return
+    ss_manager.bind_public_host(host)
+    text = "域名更新成功，所有链接已更新。"
+    print(text)
+    notify_domain_update(text)
+    subprocess.run(["systemctl", "restart", "boil-change-ip"], check=False)
+    print("服务已重启。")
+
+
 def main():
     if len(sys.argv) < 2:
-        print("Usage: ss_cli.py list|add|delete|reset|notify")
+        print("Usage: ss_cli.py list|add|delete|reset|notify|bind-domain")
         return 2
     cmd = sys.argv[1]
     if cmd == "list":
@@ -93,6 +138,8 @@ def main():
         reset_all()
     elif cmd == "notify":
         notify_time()
+    elif cmd == "bind-domain":
+        bind_domain()
     else:
         print(f"未知命令：{cmd}")
         return 2
