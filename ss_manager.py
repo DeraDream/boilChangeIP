@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import quote
+from urllib.parse import quote, quote_plus
 
 import requests
 
@@ -316,8 +316,13 @@ def ss_url(user: dict[str, Any]) -> str:
 
 def ss_url_html(user: dict[str, Any]) -> str:
     url = ss_url(user)
-    escaped = html.escape(url, quote=True)
-    return f'<a href="{escaped}">{escaped}</a>'
+    escaped_url = html.escape(url, quote=True)
+    share_url = f"https://t.me/share/url?url={quote_plus(url)}"
+    escaped_share_url = html.escape(share_url, quote=True)
+    return (
+        f'<a href="{escaped_share_url}">点击查看 SS 链接</a>\n'
+        f"<code>{escaped_url}</code>"
+    )
 
 
 def create_user(

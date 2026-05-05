@@ -220,11 +220,12 @@ def status_text() -> str:
         )
 
     traffic_text = "\n".join(traffic_lines) if traffic_lines else "暂无用户流量。"
+    account_text = (ACCOUNT or "未配置").replace("@", "@\u200b")
     return (
         "Bot 状态：运行中\n"
         f"版本：{get_version()}\n"
         f"授权用户：{', '.join(str(x) for x in ALLOWED_USERS) or '未配置'}\n"
-        f"IPPanel 账号：{ACCOUNT or '未配置'}\n"
+        f"IPPanel 账号：{account_text}\n"
         f"SS 用户数：{len(users)}\n"
         f"总入站：{ss_manager.format_bytes(total_in)}\n"
         f"总出站：{ss_manager.format_bytes(total_out)}\n"
