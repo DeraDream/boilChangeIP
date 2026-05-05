@@ -1,52 +1,54 @@
 # Boil Change IP
 
-这是一个用于管理 IPPanel 换 IP 的 Telegram 机器人，支持查询设备当前公网 IP、点击设备立即换 IP，以及生成当前 IP 质量检测图片。
+Boil Change IP 是一个用于管理 IPPanel 换 IP 的 Telegram Bot。它可以查看设备当前公网 IP，点击设备立即换 IP，并生成当前 IP 的质量检测图片。
+
+项目地址：
+
+```text
+https://github.com/DeraDream/boilChangeIP.git
+```
 
 ## 功能
 
-- 查询 IPPanel 设备名称、状态、接口和当前公网 IP。
-- 保持原有换 IP 逻辑，通过 IPPanel `/api/reconnect` 接口执行换 IP。
-- Telegram 机器人菜单：
-  - Bot 状态
-  - 获取列表并点击设备立即换 IP
-  - 获取当前 IP 质量图片
-- VPS 全局命令：`boiltg`
-  - 更新脚本
-  - 修改配置
-  - 卸载脚本
-  - 查看脚本状态
-- 支持版本号更新。菜单会比较本地 `VERSION` 和远程 `origin/main:VERSION`，远程版本更高时会备份 `.env` 用户配置、替换本地项目文件为远程版本、恢复配置、安装依赖并立即重启服务。
+- 查看 IPPanel 设备列表、设备名称、状态、接口和当前公网 IP。
+- 点击 Telegram Bot 按钮立即执行换 IP。
+- 保留原有换 IP 逻辑，通过 IPPanel `/api/reconnect` 接口执行。
+- 生成当前 IP 质量检测图片，并发送到 Telegram。
+- 提供 VPS 全局管理命令 `boiltg`。
+- 支持版本号更新，更新时保留用户 `.env` 配置。
 
-## VPS 一键安装
+## 安装
 
-在 Linux VPS 上使用 root 执行。默认推荐 HTTPS 安装，不需要在 VPS 上配置 GitHub SSH Key：
+在 Linux VPS 上使用 `root` 执行下面这一条命令即可：
 
 ```bash
 apt-get update && apt-get install -y git curl && mkdir -p /opt && cd /opt && git clone https://github.com/DeraDream/boilChangeIP.git boil-change-ip && cd boil-change-ip && bash install.sh
 ```
 
-如果你的 VPS 已经给 `root` 用户配置好了 GitHub SSH Key，也可以使用 SSH 安装：
+安装脚本会先检查依赖。如果缺少依赖，会自动安装并再次检查。依赖检查通过后，才会继续询问配置。
 
-```bash
-apt-get update && apt-get install -y git curl && mkdir -p /opt && cd /opt && git clone git@github.com:DeraDream/boilChangeIP.git boil-change-ip && cd boil-change-ip && bash install.sh
-```
+会检查的依赖包括：
 
-如果 SSH 安装出现 `Permission denied (publickey)`，说明当前 VPS 用户没有可用的 GitHub SSH 私钥，请改用上面的 HTTPS 命令。
+- `bash`
+- `curl`
+- `git`
+- `python3`
+- `python3-venv`
+- `systemctl`
+- `ansilove`
 
-安装脚本会先检查所需依赖，缺少依赖时会自动依次安装。安装完成后会再次复查，确认 `bash`、`curl`、`git`、`python3`、`python3-venv`、`systemctl`、`ansilove` 都可用后，才会继续询问配置。
-
-安装脚本随后会依次询问：
+安装过程中会依次询问：
 
 - IPPanel 账号
 - IPPanel 密码
 - Telegram Bot Token
 - Telegram 用户 ID
 
-安装完成后，Bot 服务会自动加入 systemd 并启动。
+安装完成后会自动创建并启动 systemd 服务。
 
 ## 全局菜单
 
-安装后，在 VPS 任意位置执行：
+安装完成后，在 VPS 任意位置执行：
 
 ```bash
 boiltg
@@ -62,7 +64,9 @@ boiltg
 0. 退出
 ```
 
-修改配置的二级菜单：
+## 修改配置
+
+在 `boiltg` 菜单中选择 `2. 修改配置`，会进入二级菜单：
 
 ```text
 1. 修改 Telegram Bot Token
@@ -72,15 +76,33 @@ boiltg
 0. 返回
 ```
 
-每次修改配置后都会立即保存，并自动重启 Bot 服务使配置生效。
+修改后会立即保存配置，并自动重启服务。
 
-更新脚本会在终端输出每一步进度，并把日志保存到：
+## 更新脚本
+
+在 `boiltg` 菜单中选择 `1. 更新脚本`。
+
+更新逻辑：
+
+1. 比较本地 `VERSION` 和远程 `origin/main:VERSION`。
+2. 远程版本更高时才更新。
+3. 更新前备份 `.env` 用户配置。
+4. 拉取远程最新代码。
+5. 替换本地项目文件为远程版本。
+6. 恢复 `.env` 用户配置。
+7. 安装或更新 Python 依赖。
+8. 刷新全局命令和 systemd 服务文件。
+9. 立即重启服务。
+
+更新日志会同时输出到终端，并保存到：
 
 ```bash
 /var/log/boil-change-ip-update.log
 ```
 
-## Telegram 命令
+## Telegram Bot 菜单
+
+Bot 支持以下命令：
 
 ```text
 /start
@@ -90,32 +112,81 @@ boiltg
 /ip_change
 ```
 
-`/menu` 打开 Bot 菜单。
+`/menu` 会打开 Bot 菜单：
 
-`获取列表/更换 IP` 会拉取和 `/list` 相同的设备列表，显示设备名称和当前 IP。点击设备按钮后会立即执行换 IP。
+```text
+1. Bot 状态
+2. 获取列表/更换 IP
+3. 获取当前 IP 质量
+```
 
-`获取当前 IP 质量` 会执行：
+说明：
+
+- `Bot 状态`：查看 Bot 是否运行、当前版本、授权用户和 IPPanel 账号。
+- `获取列表/更换 IP`：显示设备名称和当前 IP，点击设备按钮后立即换 IP。
+- `获取当前 IP 质量`：运行 IP 质量检测脚本，生成 PNG 图片并发送到 Telegram。
+
+## IP 质量检测
+
+检测脚本会执行：
 
 ```bash
 bash <(curl -sL IP.Check.Place) -4 -E
 ```
 
-脚本会捕获 ANSI 输出，用 `ansilove` 生成 PNG 图片，并把图片发送回 Telegram。
+执行流程：
 
-## 服务命令
+1. 获取当前公网 IPv4。
+2. 读取本地缓存的旧 IP。
+3. 对比新旧 IP。
+4. 需要检测时调用远程脚本。
+5. 捕获 ANSI 输出。
+6. 使用 `ansilove` 生成 PNG 图片。
+7. 发送 Telegram 通知或返回图片给 Bot。
+8. 清理临时文件。
+
+## 服务管理
+
+查看状态：
 
 ```bash
 systemctl status boil-change-ip
+```
+
+重启服务：
+
+```bash
 systemctl restart boil-change-ip
+```
+
+查看日志：
+
+```bash
 journalctl -u boil-change-ip -f
 ```
+
+## 卸载
+
+执行：
+
+```bash
+boiltg
+```
+
+选择：
+
+```text
+3. 卸载脚本
+```
+
+卸载会移除 systemd 服务和全局命令 `boiltg`。项目文件会保留在 `/opt/boil-change-ip`。
 
 ## 文件说明
 
 - `bot_main.py`：Telegram Bot 主程序。
 - `api_client.py`：IPPanel API 客户端。
-- `monitor_ip.sh`：IP 质量图片生成脚本，也支持可选 Telegram 通知。
+- `monitor_ip.sh`：IP 质量图片生成脚本。
 - `install.sh`：交互式安装脚本。
 - `scripts/boiltg.sh`：VPS 全局管理菜单。
-- `.env`：本地运行配置，由安装脚本创建，不会提交到 Git。
-- `VERSION`：项目版本号，用于判断是否需要更新。
+- `.env`：用户配置文件，由安装脚本生成，不会提交到 Git。
+- `VERSION`：版本号，用于更新判断。
