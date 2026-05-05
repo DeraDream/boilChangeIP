@@ -19,17 +19,19 @@
 
 ## VPS 一键安装
 
-在 Linux VPS 上使用 root 执行：
+在 Linux VPS 上使用 root 执行。默认推荐 HTTPS 安装，不需要在 VPS 上配置 GitHub SSH Key：
+
+```bash
+apt-get update && apt-get install -y git curl && mkdir -p /opt && cd /opt && git clone https://github.com/DeraDream/boilChangeIP.git boil-change-ip && cd boil-change-ip && bash install.sh
+```
+
+如果你的 VPS 已经给 `root` 用户配置好了 GitHub SSH Key，也可以使用 SSH 安装：
 
 ```bash
 apt-get update && apt-get install -y git curl && mkdir -p /opt && cd /opt && git clone git@github.com:DeraDream/boilChangeIP.git boil-change-ip && cd boil-change-ip && bash install.sh
 ```
 
-如果 VPS 只能使用 HTTPS 访问 GitHub，可以用下面这个命令：
-
-```bash
-apt-get update && apt-get install -y git curl && mkdir -p /opt && cd /opt && git clone https://github.com/DeraDream/boilChangeIP.git boil-change-ip && cd boil-change-ip && bash install.sh
-```
+如果 SSH 安装出现 `Permission denied (publickey)`，说明当前 VPS 用户没有可用的 GitHub SSH 私钥，请改用上面的 HTTPS 命令。
 
 安装脚本会先检查所需依赖，缺少依赖时会自动依次安装。安装完成后会再次复查，确认 `bash`、`curl`、`git`、`python3`、`python3-venv`、`systemctl`、`ansilove` 都可用后，才会继续询问配置。
 
