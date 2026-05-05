@@ -120,16 +120,13 @@ get_current_ip() {
 render_png() {
   local ansi_file="$1"
   local png_file="$2"
-  local processed_file="${ansi_file}.processed"
 
   if ! command -v ansilove >/dev/null 2>&1; then
     echo "生成 PNG 图片需要安装 ansilove。" >&2
     return 1
   fi
 
-  grep -v -E "Map:|IP Checks Today:|Report Link:" "$ansi_file" > "$processed_file" || true
-  ansilove -o "$png_file" "$processed_file" >/dev/null
-  rm -f "$processed_file"
+  ansilove -o "$png_file" "$ansi_file" >/dev/null
 }
 
 send_telegram() {
@@ -145,7 +142,7 @@ send_telegram() {
   curl -fsS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendPhoto" \
     -F chat_id="${TG_CHAT_ID}" \
     -F parse_mode="HTML" \
-    -F caption="<b>IP 质量完整报告</b>
+    -F caption="<b>IP 质量双栈完整报告</b>
 旧 IP：<code>${old_ip:-无}</code>
 新 IP：<code>${current_ip}</code>
 时间：$(date '+%Y-%m-%d %H:%M:%S')
@@ -175,45 +172,48 @@ fi
 printf '%s\n' "$CURRENT_IP" > "$IP_LOG_FILE"
 log "IP 已变化或强制检测：${LAST_IP:-无} -> $CURRENT_IP"
 
-ANSI_FILE="$(mktemp)"
+ANSI_FILE="$(mktemp --suffix=.ansi)"
+RUN_LOG_FILE="$(mktemp)"
 PNG_FILE="${IMAGE_DIR}/ip_quality_$(date '+%Y%m%d_%H%M%S').png"
 
 cleanup() {
-  rm -f "$ANSI_FILE"
+  rm -f "$ANSI_FILE" "$RUN_LOG_FILE"
   if [ "$IMAGE_ONLY" -ne 1 ]; then
     rm -f "$PNG_FILE"
   fi
 }
 trap cleanup EXIT
 
-log "执行 https://IP.Check.Place 完整检测"
+log "执行 https://IP.Check.Place 双栈完整检测，并输出最终 ANSI 报告"
 set +e
-bash <(curl -fsSL https://IP.Check.Place) > "$ANSI_FILE" 2>&1
+bash <(curl -fsSL https://IP.Check.Place) -o "$ANSI_FILE" > "$RUN_LOG_FILE" 2>&1
 CHECK_STATUS=$?
 set -e
 
 if [ ! -s "$ANSI_FILE" ]; then
-  echo "IP.Check.Place 未返回有效输出。" >&2
+  echo "IP.Check.Place 未生成最终 ANSI 报告。" >&2
   if [ "$CHECK_STATUS" -ne 0 ]; then
     echo "远程检测脚本退出码：$CHECK_STATUS" >&2
   fi
+  echo "检测过程输出最后 80 行：" >&2
+  tail -n 80 "$RUN_LOG_FILE" >&2 || true
   exit 1
 fi
 
 if [ "$CHECK_STATUS" -ne 0 ]; then
-  log "IP.Check.Place 退出码为 $CHECK_STATUS，但已捕获输出，继续尝试生成图片。"
+  log "IP.Check.Place 退出码为 $CHECK_STATUS，但已生成最终 ANSI 报告，继续生成图片。"
 fi
 
 if ! render_png "$ANSI_FILE" "$PNG_FILE"; then
   echo "PNG 图片生成失败。" >&2
-  echo "检测输出最后 40 行：" >&2
+  echo "最终 ANSI 报告最后 40 行：" >&2
   tail -n 40 "$ANSI_FILE" >&2 || true
   exit 1
 fi
 
 if [ ! -f "$PNG_FILE" ]; then
   echo "PNG 图片生成失败。" >&2
-  echo "检测输出最后 40 行：" >&2
+  echo "最终 ANSI 报告最后 40 行：" >&2
   tail -n 40 "$ANSI_FILE" >&2 || true
   exit 1
 fi
