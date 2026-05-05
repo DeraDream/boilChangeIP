@@ -65,8 +65,8 @@ def reset_all():
 
 def notify_time():
     current = ss_manager.get_setting("traffic_notify_time", "未设置")
-    print(f"当前通知时间：{current or '未设置'}")
-    value = input("请输入通知时间 HH:MM，输入 off 关闭：").strip()
+    print(f"当前通知时间（北京时间）：{current or '未设置'}")
+    value = input("请输入北京时间 HH:MM，输入 off 关闭：").strip()
     if value.lower() in ("off", "0", "关闭"):
         ss_manager.set_setting("traffic_notify_time", "")
         ss_manager.set_setting("traffic_notify_last_date", "")
@@ -77,7 +77,7 @@ def notify_time():
     _dt.datetime.strptime(value, "%H:%M")
     ss_manager.set_setting("traffic_notify_time", value)
     ss_manager.set_setting("traffic_notify_last_date", "")
-    print(f"已设置 TG 流量通知时间：{value}")
+    print(f"已设置 TG 流量通知时间（北京时间）：{value}")
 
 
 def notify_domain_update(text: str):

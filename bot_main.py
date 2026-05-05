@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Dict
+from zoneinfo import ZoneInfo
 
 import schedule
 import telebot
@@ -27,6 +28,7 @@ BOT_TOKEN = env.get("BOT_TOKEN", "")
 ALLOWED_USERS = parse_allowed_users(env.get("ALLOWED_USERS", ""))
 ACCOUNT = env.get("ACCOUNT", "")
 PASSWORD = env.get("PASSWORD", "")
+CHINA_TZ = ZoneInfo("Asia/Shanghai")
 
 if not BOT_TOKEN:
     raise SystemExit("缺少 BOT_TOKEN，请运行 ./install.sh 或 boiltg 进行配置。")
@@ -405,7 +407,7 @@ def send_notify_menu(chat_id: int):
         InlineKeyboardButton("自定义 HH:MM", callback_data="notify_custom"),
         InlineKeyboardButton("关闭通知", callback_data="notify_off"),
     )
-    bot.send_message(chat_id, f"选择通知时间\n当前：{current}", reply_markup=markup)
+    bot.send_message(chat_id, f"选择通知时间（北京时间）\n当前：{current}", reply_markup=markup)
 
 
 def start_bind_domain(chat_id: int, admin_id: int):
@@ -499,7 +501,7 @@ def handle_notify_actions(call):
     if call.data == "notify_custom":
         admin_states[call.from_user.id] = {"mode": "notify_time"}
         bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, "请输入通知时间，格式 HH:MM，例如 21:30")
+        bot.send_message(call.message.chat.id, "请输入北京时间通知时间，格式 HH:MM，例如 21:30")
         return
     if call.data == "notify_off":
         ss_manager.set_setting("traffic_notify_time", "")
@@ -510,7 +512,7 @@ def handle_notify_actions(call):
     ss_manager.set_setting("traffic_notify_time", value)
     ss_manager.set_setting("traffic_notify_last_date", "")
     bot.answer_callback_query(call.id, "已设置。")
-    safe_edit(call, f"TG 流量通知时间已设置为：{value}")
+    safe_edit(call, f"TG 流量通知时间已设置为北京时间：{value}")
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "user_change_ip")
@@ -744,7 +746,7 @@ def handle_admin_state_input(message):
             ss_manager.set_setting("traffic_notify_time", value)
             ss_manager.set_setting("traffic_notify_last_date", "")
             admin_states.pop(message.from_user.id, None)
-            bot.send_message(message.chat.id, f"TG 流量通知时间已设置为：{value}")
+            bot.send_message(message.chat.id, f"TG 流量通知时间已设置为北京时间：{value}")
             return
     except Exception as exc:
         bot.send_message(message.chat.id, f"输入无效：{exc}")
@@ -927,8 +929,9 @@ def send_scheduled_traffic_report():
     notify_time = ss_manager.get_setting("traffic_notify_time", "").strip()
     if not notify_time:
         return
-    today = datetime.now().strftime("%Y-%m-%d")
-    current_time = datetime.now().strftime("%H:%M")
+    china_now = datetime.now(CHINA_TZ)
+    today = china_now.strftime("%Y-%m-%d")
+    current_time = china_now.strftime("%H:%M")
     if current_time != notify_time:
         return
     if ss_manager.get_setting("traffic_notify_last_date", "") == today:
