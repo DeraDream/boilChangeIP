@@ -31,7 +31,9 @@ apt-get update && apt-get install -y git curl && mkdir -p /opt && cd /opt && git
 apt-get update && apt-get install -y git curl && mkdir -p /opt && cd /opt && git clone https://github.com/DeraDream/boilChangeIP.git boil-change-ip && cd boil-change-ip && bash install.sh
 ```
 
-安装脚本会依次询问：
+安装脚本会先检查所需依赖，缺少依赖时会自动依次安装。安装完成后会再次复查，确认 `bash`、`curl`、`git`、`python3`、`python3-venv`、`systemctl`、`ansilove` 都可用后，才会继续询问配置。
+
+安装脚本随后会依次询问：
 
 - IPPanel 账号
 - IPPanel 密码
