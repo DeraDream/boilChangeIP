@@ -15,13 +15,14 @@ def list_users():
         return
     for user in users:
         print("-" * 40)
-        print(ss_manager.format_user(user, include_url=False))
+        print(ss_manager.format_user(user, include_url=True))
 
 
 def add_user():
-    tg_user_id = int(input("请输入 TG 用户 ID：").strip())
+    tg_raw = input("请输入 TG 用户 ID，留空/0 表示不绑定：").strip()
+    tg_user_id = None if tg_raw in ("", "0", "不绑定", "无") else int(tg_raw)
     tg_username = input("请输入 TG 用户名，未知可留空：").strip() or "未知"
-    display_name = input("请输入显示名，留空自动生成：").strip() or tg_username.replace("@", "") or f"user_{tg_user_id}"
+    display_name = input("请输入显示名，留空自动生成：").strip() or tg_username.replace("@", "") or (f"user_{tg_user_id}" if tg_user_id is not None else "manual_user")
     port_raw = input("请输入端口，留空随机：").strip()
     expire_at = input(f"请输入到期日，留空默认 {ss_manager.default_expire_date()}：").strip() or ss_manager.default_expire_date()
     traffic_raw = input("请输入月流量 GB，留空默认 100：").strip() or "100"

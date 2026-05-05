@@ -256,7 +256,7 @@ def handle_request_button(message):
 @bot.message_handler(func=lambda message: message.text == BTN_CREATE_USER)
 @check_admin
 def handle_reply_create_user(message):
-    bot.send_message(message.chat.id, "请让用户点击 /start 后申请 SS 链接，或发送用户 TG ID 手动创建。")
+    start_manual_create(message.chat.id, message.from_user.id)
 
 
 @bot.message_handler(func=lambda message: message.text == BTN_USER_MGMT)
@@ -312,22 +312,28 @@ def handle_ss_request(message):
         bot.send_message(admin_id, text, reply_markup=markup)
 
 
-def approval_markup(tg_user_id: int) -> InlineKeyboardMarkup:
+def approval_markup(draft: ss_manager.ApprovalDraft) -> InlineKeyboardMarkup:
+    key = draft.key
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
-        InlineKeyboardButton("确认创建", callback_data=f"draft_confirm_{tg_user_id}"),
-        InlineKeyboardButton("修改端口", callback_data=f"draft_edit_port_{tg_user_id}"),
-        InlineKeyboardButton("修改用户名", callback_data=f"draft_edit_name_{tg_user_id}"),
-        InlineKeyboardButton("修改到期日", callback_data=f"draft_edit_expire_{tg_user_id}"),
-        InlineKeyboardButton("切换到期禁用", callback_data=f"draft_toggle_expire_disable_{tg_user_id}"),
-        InlineKeyboardButton("修改流量", callback_data=f"draft_edit_traffic_{tg_user_id}"),
-        InlineKeyboardButton("取消", callback_data=f"draft_cancel_{tg_user_id}"),
+        InlineKeyboardButton("确认创建", callback_data=f"draft_confirm_{key}"),
+        InlineKeyboardButton("修改端口", callback_data=f"draft_edit_port_{key}"),
+        InlineKeyboardButton("修改用户名", callback_data=f"draft_edit_name_{key}"),
+        InlineKeyboardButton("修改到期日", callback_data=f"draft_edit_expire_{key}"),
+        InlineKeyboardButton("切换到期禁用", callback_data=f"draft_toggle_expire_disable_{key}"),
+        InlineKeyboardButton("修改流量", callback_data=f"draft_edit_traffic_{key}"),
+        InlineKeyboardButton("取消", callback_data=f"draft_cancel_{key}"),
     )
     return markup
 
 
 def send_draft(chat_id: int, draft: ss_manager.ApprovalDraft):
-    bot.send_message(chat_id, draft.as_text(), reply_markup=approval_markup(draft.tg_user_id))
+    bot.send_message(chat_id, draft.as_text(), reply_markup=approval_markup(draft))
+
+
+def start_manual_create(chat_id: int, admin_id: int):
+    admin_states[admin_id] = {"mode": "manual_tg_id"}
+    bot.send_message(chat_id, "请输入要绑定的 TG ID；如果不需要绑定，直接发送 0 或 留空。")
 
 
 def send_user_management(chat_id: int):
@@ -343,7 +349,7 @@ def send_user_management(chat_id: int):
             InlineKeyboardButton("修改流量", callback_data=f"user_edit_traffic_{user['id']}"),
             InlineKeyboardButton("删除用户", callback_data=f"user_delete_{user['id']}"),
         )
-        bot.send_message(chat_id, ss_manager.format_user(user), reply_markup=markup)
+        bot.send_message(chat_id, ss_manager.format_user(user, include_url=True), parse_mode="HTML", reply_markup=markup)
 
 
 def send_delete_users(chat_id: int):
@@ -353,7 +359,8 @@ def send_delete_users(chat_id: int):
         return
     markup = InlineKeyboardMarkup(row_width=1)
     for user in users:
-        markup.add(InlineKeyboardButton(f"{user['id']}. {user['display_name']} | {user['tg_user_id']}", callback_data=f"user_delete_{user['id']}"))
+        tg_label = user["tg_user_id"] or "未绑定"
+        markup.add(InlineKeyboardButton(f"{user['id']}. {user['display_name']} | {tg_label}", callback_data=f"user_delete_{user['id']}"))
     bot.send_message(chat_id, "请选择要删除的用户：", reply_markup=markup)
 
 
@@ -419,7 +426,7 @@ def handle_menu_quality(call):
 @check_admin
 def handle_menu_create_user(call):
     bot.answer_callback_query(call.id)
-    safe_edit(call, "请让用户点击 /start 后申请 SS 链接，或发送用户 TG ID 手动创建。", reply_markup=main_menu())
+    start_manual_create(call.message.chat.id, call.from_user.id)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "menu_user_mgmt")
@@ -523,10 +530,10 @@ def handle_request_reject(call):
 def handle_draft_actions(call):
     parts = call.data.split("_")
     action = parts[1]
-    tg_user_id = int(parts[-1])
+    draft_key = parts[-1]
     state = admin_states.get(call.from_user.id) or {}
     draft = state.get("draft")
-    if not draft or draft.tg_user_id != tg_user_id:
+    if not draft or draft.key != draft_key:
         bot.answer_callback_query(call.id, "草稿已过期，请重新接受申请。", show_alert=True)
         return
 
@@ -543,10 +550,11 @@ def handle_draft_actions(call):
         admin_states.pop(call.from_user.id, None)
         bot.answer_callback_query(call.id, "已创建。")
         safe_edit(call, "已创建用户：\n\n" + ss_manager.format_user(user))
-        try:
-            bot.send_message(tg_user_id, "你的 SS 链接已开通，请点击底部“我的链接”查看。", reply_markup=user_menu())
-        except Exception:
-            pass
+        if draft.tg_user_id is not None:
+            try:
+                bot.send_message(draft.tg_user_id, "你的 SS 链接已开通，请点击底部“我的链接”查看。", reply_markup=user_menu())
+            except Exception:
+                pass
         return
 
     if action == "cancel":
@@ -627,6 +635,13 @@ def handle_admin_state_input(message):
     mode = state.get("mode", "")
     value = (message.text or "").strip()
     try:
+        if mode == "manual_tg_id":
+            tg_user_id = None if value in ("", "0", "不绑定", "无") else int(value)
+            draft = ss_manager.make_manual_draft(tg_user_id)
+            admin_states[message.from_user.id] = {"mode": "draft", "draft": draft}
+            send_draft(message.chat.id, draft)
+            return
+
         if mode.startswith("draft_edit_"):
             draft = state["draft"]
             field = mode.replace("draft_edit_", "")

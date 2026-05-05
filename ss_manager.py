@@ -54,7 +54,7 @@ def init_db() -> None:
             """
             CREATE TABLE IF NOT EXISTS access_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                tg_user_id INTEGER NOT NULL UNIQUE,
+                tg_user_id INTEGER UNIQUE,
                 tg_username TEXT NOT NULL DEFAULT '未知',
                 status TEXT NOT NULL DEFAULT 'pending',
                 created_at TEXT NOT NULL,
@@ -115,6 +115,50 @@ def migrate_db(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE ss_users ADD COLUMN outbound_baseline_bytes INTEGER NOT NULL DEFAULT 0"
         )
+    info = {
+        row[1]: {"type": row[2], "notnull": row[3], "default": row[4], "pk": row[5]}
+        for row in conn.execute("PRAGMA table_info(ss_users)").fetchall()
+    }
+    if info.get("tg_user_id", {}).get("notnull"):
+        conn.execute("ALTER TABLE ss_users RENAME TO ss_users_old")
+        conn.execute(
+            """
+            CREATE TABLE ss_users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tg_user_id INTEGER UNIQUE,
+                tg_username TEXT NOT NULL DEFAULT '未知',
+                display_name TEXT NOT NULL,
+                port INTEGER NOT NULL UNIQUE,
+                method TEXT NOT NULL,
+                password TEXT NOT NULL,
+                expire_at TEXT NOT NULL,
+                expire_disable_enabled INTEGER NOT NULL DEFAULT 1,
+                traffic_limit_gb INTEGER NOT NULL DEFAULT 100,
+                inbound_baseline_bytes INTEGER NOT NULL DEFAULT 0,
+                outbound_baseline_bytes INTEGER NOT NULL DEFAULT 0,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO ss_users (
+                id, tg_user_id, tg_username, display_name, port, method, password,
+                expire_at, expire_disable_enabled, traffic_limit_gb,
+                inbound_baseline_bytes, outbound_baseline_bytes,
+                enabled, created_at, updated_at
+            )
+            SELECT
+                id, tg_user_id, tg_username, display_name, port, method, password,
+                expire_at, expire_disable_enabled, traffic_limit_gb,
+                inbound_baseline_bytes, outbound_baseline_bytes,
+                enabled, created_at, updated_at
+            FROM ss_users_old
+            """
+        )
+        conn.execute("DROP TABLE ss_users_old")
 
 
 def db() -> sqlite3.Connection:
@@ -247,7 +291,7 @@ def ss_url(user: dict[str, Any]) -> str:
 
 
 def create_user(
-    tg_user_id: int,
+    tg_user_id: Optional[int],
     tg_username: str,
     display_name: str,
     port: Optional[int] = None,
@@ -259,7 +303,7 @@ def create_user(
     port = port or random_port()
     expire_at = expire_at or default_expire_date()
     with db() as conn:
-        conn.execute(
+        cursor = conn.execute(
             """
             INSERT INTO ss_users (
                 tg_user_id, tg_username, display_name, port, method, password,
@@ -281,11 +325,13 @@ def create_user(
                 now_text(),
             ),
         )
+        user_id = int(cursor.lastrowid)
         conn.commit()
-    mark_request(tg_user_id, "approved", 0)
+    if tg_user_id is not None:
+        mark_request(tg_user_id, "approved", 0)
     render_singbox_config()
     restart_singbox()
-    return get_user_by_tg(tg_user_id) or {}
+    return get_user(user_id) or {}
 
 
 def update_user(user_id: int, **updates: Any) -> None:
@@ -696,7 +742,7 @@ def traffic_report() -> str:
 def format_user(user: dict[str, Any], include_url: bool = False) -> str:
     text = (
         f"用户 ID：{user['id']}\n"
-        f"TG ID：{user['tg_user_id']}\n"
+        f"TG ID：{user['tg_user_id'] or '未绑定'}\n"
         f"用户名：{user['tg_username'] or '未知'}\n"
         f"显示名：{user['display_name']}\n"
         f"端口：{user['port']}\n"
@@ -713,7 +759,7 @@ def format_user(user: dict[str, Any], include_url: bool = False) -> str:
 
 @dataclass
 class ApprovalDraft:
-    tg_user_id: int
+    tg_user_id: Optional[int]
     tg_username: str
     display_name: str
     port: int
@@ -721,10 +767,14 @@ class ApprovalDraft:
     expire_disable_enabled: int
     traffic_limit_gb: int
 
+    @property
+    def key(self) -> str:
+        return str(self.tg_user_id) if self.tg_user_id is not None else "manual"
+
     def as_text(self) -> str:
         return (
             "请确认开通参数：\n\n"
-            f"TG ID：{self.tg_user_id}\n"
+            f"TG ID：{self.tg_user_id if self.tg_user_id is not None else '未绑定'}\n"
             f"用户名：{self.tg_username}\n"
             f"显示名：{self.display_name}\n"
             f"端口：{self.port}\n"
@@ -740,6 +790,21 @@ def make_draft(tg_user_id: int, tg_username: str) -> ApprovalDraft:
         tg_user_id=tg_user_id,
         tg_username=tg_username or "未知",
         display_name=(tg_username or f"user_{tg_user_id}").replace("@", ""),
+        port=random_port(),
+        expire_at=default_expire_date(),
+        expire_disable_enabled=1,
+        traffic_limit_gb=DEFAULT_TRAFFIC_GB,
+    )
+
+
+def make_manual_draft(tg_user_id: Optional[int], tg_username: str = "未知") -> ApprovalDraft:
+    display_seed = tg_username.replace("@", "") if tg_username and tg_username != "未知" else ""
+    if not display_seed:
+        display_seed = f"tg_{tg_user_id}" if tg_user_id is not None else "manual_user"
+    return ApprovalDraft(
+        tg_user_id=tg_user_id,
+        tg_username=tg_username or "未知",
+        display_name=display_seed,
         port=random_port(),
         expire_at=default_expire_date(),
         expire_disable_enabled=1,
