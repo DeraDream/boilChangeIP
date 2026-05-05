@@ -172,12 +172,14 @@ fi
 printf '%s\n' "$CURRENT_IP" > "$IP_LOG_FILE"
 log "IP 已变化或强制检测：${LAST_IP:-无} -> $CURRENT_IP"
 
-ANSI_FILE="$(mktemp --suffix=.ansi)"
+TEMP_DIR="$(mktemp -d)"
+ANSI_FILE="${TEMP_DIR}/ipquality.ansi"
 RUN_LOG_FILE="$(mktemp)"
 PNG_FILE="${IMAGE_DIR}/ip_quality_$(date '+%Y%m%d_%H%M%S').png"
 
 cleanup() {
-  rm -f "$ANSI_FILE" "$RUN_LOG_FILE"
+  rm -rf "$TEMP_DIR"
+  rm -f "$RUN_LOG_FILE"
   if [ "$IMAGE_ONLY" -ne 1 ]; then
     rm -f "$PNG_FILE"
   fi
