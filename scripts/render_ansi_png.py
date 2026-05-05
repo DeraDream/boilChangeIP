@@ -58,8 +58,9 @@ def char_width(ch: str) -> int:
 
 def find_font(size: int) -> ImageFont.FreeTypeFont:
     candidates = [
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/opentype/noto/NotoSansMonoCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansMonoCJK-Regular.ttc",
         "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
         "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
@@ -180,13 +181,13 @@ def parse_ansi(text: str):
 def render(input_path: Path, output_path: Path):
     text = input_path.read_text(encoding="utf-8", errors="replace")
     lines = parse_ansi(text)
-    font = find_font(18)
+    font = find_font(16)
     bold_font = font
 
     bbox = font.getbbox("M")
-    cell_w = max(10, int(font.getlength("M")))
-    cell_h = max(22, bbox[3] - bbox[1] + 7)
-    padding = 14
+    cell_w = 8
+    cell_h = max(19, bbox[3] - bbox[1] + 4)
+    padding = 10
     max_cols = 1
     for line in lines:
         for x, _ch, width, _fg, _bg, _bold in line:
@@ -201,13 +202,33 @@ def render(input_path: Path, output_path: Path):
 
     for row, line in enumerate(lines):
         y = padding + row * cell_h
+        segments = []
+        current = None
         for x, ch, width, fg, bg, bold in line:
-            px = padding + x * cell_w
-            draw.rectangle(
-                [px, y, px + max(1, width) * cell_w, y + cell_h],
-                fill=bg,
+            if current and current["x"] + current["width"] == x and current["fg"] == fg and current["bg"] == bg and current["bold"] == bold:
+                current["text"] += ch
+                current["width"] += width
+            else:
+                current = {
+                    "x": x,
+                    "text": ch,
+                    "width": width,
+                    "fg": fg,
+                    "bg": bg,
+                    "bold": bold,
+                }
+                segments.append(current)
+
+        for segment in segments:
+            px = padding + segment["x"] * cell_w
+            width_px = max(1, segment["width"]) * cell_w
+            draw.rectangle([px, y, px + width_px, y + cell_h], fill=segment["bg"])
+            draw.text(
+                (px, y + 1),
+                segment["text"],
+                font=bold_font if segment["bold"] else font,
+                fill=segment["fg"],
             )
-            draw.text((px, y + 2), ch, font=bold_font if bold else font, fill=fg)
 
     image.save(output_path, "PNG")
 
