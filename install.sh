@@ -51,16 +51,17 @@ install_os_packages() {
     apt)
       log_msg "正在更新 apt 软件源..."
       apt-get update
-      log_msg "正在安装系统依赖：python3 python3-venv python3-pip curl git ansilove"
-      DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-venv python3-pip curl git ansilove
+      log_msg "正在安装系统依赖：python3 python3-venv python3-pip curl git ansilove jq bc dnsutils iproute2 netcat-openbsd"
+      DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        python3 python3-venv python3-pip curl git ansilove jq bc dnsutils iproute2 netcat-openbsd
       ;;
     dnf)
-      log_msg "正在安装系统依赖：python3 python3-pip curl git ansilove"
-      dnf install -y python3 python3-pip curl git ansilove
+      log_msg "正在安装系统依赖：python3 python3-pip curl git ansilove jq bc bind-utils iproute nmap-ncat"
+      dnf install -y python3 python3-pip curl git ansilove jq bc bind-utils iproute nmap-ncat
       ;;
     yum)
-      log_msg "正在安装系统依赖：python3 python3-pip curl git ansilove"
-      yum install -y python3 python3-pip curl git ansilove
+      log_msg "正在安装系统依赖：python3 python3-pip curl git ansilove jq bc bind-utils iproute nmap-ncat"
+      yum install -y python3 python3-pip curl git ansilove jq bc bind-utils iproute nmap-ncat
       ;;
     *)
       log_msg "未识别包管理器，无法自动安装系统依赖。"
@@ -78,6 +79,11 @@ check_dependencies() {
   command -v python3 >/dev/null 2>&1 || MISSING_DEPS+=("python3")
   command -v systemctl >/dev/null 2>&1 || MISSING_DEPS+=("systemctl")
   command -v ansilove >/dev/null 2>&1 || MISSING_DEPS+=("ansilove")
+  command -v jq >/dev/null 2>&1 || MISSING_DEPS+=("jq")
+  command -v bc >/dev/null 2>&1 || MISSING_DEPS+=("bc")
+  command -v dig >/dev/null 2>&1 || MISSING_DEPS+=("dnsutils/dig")
+  command -v ip >/dev/null 2>&1 || MISSING_DEPS+=("iproute2/ip")
+  command -v nc >/dev/null 2>&1 || MISSING_DEPS+=("netcat/nc")
 
   if command -v python3 >/dev/null 2>&1; then
     python3 -c "import venv, ensurepip" >/dev/null 2>&1 || MISSING_DEPS+=("python3-venv")

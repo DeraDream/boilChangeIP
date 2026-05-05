@@ -24,6 +24,81 @@ log() {
   printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG_FILE"
 }
 
+detect_pkg_manager() {
+  if command -v apt-get >/dev/null 2>&1; then
+    echo "apt"
+  elif command -v dnf >/dev/null 2>&1; then
+    echo "dnf"
+  elif command -v yum >/dev/null 2>&1; then
+    echo "yum"
+  else
+    echo "unknown"
+  fi
+}
+
+check_quality_dependencies() {
+  QUALITY_MISSING=()
+  command -v curl >/dev/null 2>&1 || QUALITY_MISSING+=("curl")
+  command -v jq >/dev/null 2>&1 || QUALITY_MISSING+=("jq")
+  command -v bc >/dev/null 2>&1 || QUALITY_MISSING+=("bc")
+  command -v dig >/dev/null 2>&1 || QUALITY_MISSING+=("dnsutils/dig")
+  command -v ip >/dev/null 2>&1 || QUALITY_MISSING+=("iproute2/ip")
+  command -v nc >/dev/null 2>&1 || QUALITY_MISSING+=("netcat/nc")
+  command -v ansilove >/dev/null 2>&1 || QUALITY_MISSING+=("ansilove")
+
+  [ "${#QUALITY_MISSING[@]}" -eq 0 ]
+}
+
+install_quality_dependencies() {
+  local pkg_manager="$1"
+  case "$pkg_manager" in
+    apt)
+      log "正在安装 IP 质量检测依赖：curl jq bc dnsutils iproute2 netcat-openbsd ansilove"
+      apt-get update >> "$LOG_FILE" 2>&1
+      DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        curl jq bc dnsutils iproute2 netcat-openbsd ansilove >> "$LOG_FILE" 2>&1
+      ;;
+    dnf)
+      log "正在安装 IP 质量检测依赖：curl jq bc bind-utils iproute nmap-ncat ansilove"
+      dnf install -y curl jq bc bind-utils iproute nmap-ncat ansilove >> "$LOG_FILE" 2>&1
+      ;;
+    yum)
+      log "正在安装 IP 质量检测依赖：curl jq bc bind-utils iproute nmap-ncat ansilove"
+      yum install -y curl jq bc bind-utils iproute nmap-ncat ansilove >> "$LOG_FILE" 2>&1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+ensure_quality_dependencies() {
+  local pkg_manager
+  if check_quality_dependencies; then
+    return 0
+  fi
+
+  log "发现 IP 质量检测依赖缺失：${QUALITY_MISSING[*]}"
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "缺少 IP 质量检测依赖：${QUALITY_MISSING[*]}。当前用户不是 root，无法自动安装。" >&2
+    return 1
+  fi
+
+  pkg_manager="$(detect_pkg_manager)"
+  if ! install_quality_dependencies "$pkg_manager"; then
+    echo "无法自动安装 IP 质量检测依赖，未识别包管理器：$pkg_manager" >&2
+    return 1
+  fi
+
+  if check_quality_dependencies; then
+    log "IP 质量检测依赖复查通过。"
+    return 0
+  fi
+
+  echo "安装后仍缺少 IP 质量检测依赖：${QUALITY_MISSING[*]}" >&2
+  return 1
+}
+
 get_current_ip() {
   local endpoints=(
     "https://api.ipify.org"
@@ -77,6 +152,8 @@ send_telegram() {
 参数：<code>-4 -E</code>" \
     -F photo="@${png_file}" >/dev/null
 }
+
+ensure_quality_dependencies
 
 CURRENT_IP="$(get_current_ip || true)"
 if [ -z "$CURRENT_IP" ]; then

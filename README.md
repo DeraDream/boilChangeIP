@@ -36,6 +36,11 @@ apt-get update && apt-get install -y git curl && mkdir -p /opt && cd /opt && git
 - `python3-venv`
 - `systemctl`
 - `ansilove`
+- `jq`
+- `bc`
+- `dnsutils`
+- `iproute2`
+- `netcat-openbsd`
 
 安装过程中会依次询问：
 
