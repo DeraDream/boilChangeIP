@@ -9,7 +9,7 @@ BIN_FILE="/usr/local/bin/boiltg"
 
 need_root() {
   if [ "$(id -u)" -ne 0 ]; then
-    echo "Please run as root: sudo bash install.sh" >&2
+    echo "请使用 root 执行：sudo bash install.sh" >&2
     exit 1
   fi
 }
@@ -29,10 +29,10 @@ prompt_value() {
 
 write_env() {
   local account password bot_token tg_user_id
-  account="$(prompt_value 'IPPanel account')"
-  password="$(prompt_value 'IPPanel password' 1)"
+  account="$(prompt_value '请输入 IPPanel 账号')"
+  password="$(prompt_value '请输入 IPPanel 密码' 1)"
   bot_token="$(prompt_value 'Telegram Bot Token')"
-  tg_user_id="$(prompt_value 'Telegram User ID')"
+  tg_user_id="$(prompt_value '请输入 Telegram 用户 ID')"
 
   cat > "$ENV_FILE" <<EOF_ENV
 BOT_TOKEN=$bot_token
@@ -52,7 +52,7 @@ install_packages() {
   elif command -v yum >/dev/null 2>&1; then
     yum install -y python3 python3-pip curl git ansilove
   else
-    echo "Please install python3, pip, curl, git and ansilove manually." >&2
+    echo "未识别包管理器，请手动安装 python3、pip、curl、git 和 ansilove。" >&2
   fi
 }
 
@@ -96,4 +96,4 @@ install_python_deps
 install_global_menu
 install_service
 
-echo "Install finished. Use 'boiltg' to open the global menu."
+echo "安装完成。请使用 'boiltg' 打开全局菜单。"

@@ -26,7 +26,7 @@ class IPPanelClient:
         return session
 
     def login(self) -> bool:
-        """Login to IPPanel and keep cookies in the session."""
+        """登录 IPPanel，并在 session 中保存 cookie。"""
         payload = {"account": self.account, "password": self.password}
         try:
             with self._lock:
@@ -39,7 +39,7 @@ class IPPanelClient:
             return False
 
     def get_raw_data(self) -> Optional[Dict[str, Any]]:
-        """Fetch raw device JSON data."""
+        """获取原始设备 JSON 数据。"""
         try:
             with self._lock:
                 resp = self.session.post(
@@ -51,44 +51,44 @@ class IPPanelClient:
             return None
 
     def get_formatted_status(self) -> str:
-        """Return formatted text for /list."""
+        """返回 /list 使用的中文格式化文本。"""
         if not self.login():
-            return "Login failed. Please check IPPanel account and password."
+            return "登录失败，请检查 IPPanel 账号和密码。"
 
         data = self.get_raw_data()
         if not data:
-            return "Failed to fetch device data."
+            return "获取设备数据失败。"
 
         limit = data.get("daily_limit", 0)
         used = data.get("daily_used", 0)
 
-        report = "=== Device Status ===\n"
-        report += f"Daily change-IP quota: used {used} / total {limit}\n\n"
+        report = "=== 设备状态 ===\n"
+        report += f"今日换 IP 额度：已用 {used} / 总共 {limit}\n\n"
 
         zone_items = data.get("zone_items", [])
         results = data.get("results", {})
 
         if not zone_items:
-            return report + "No devices found."
+            return report + "未找到设备。"
 
         for item in zone_items:
-            product_name = item.get("product_name") or "Unknown device"
-            status = item.get("status") or "unknown"
+            product_name = item.get("product_name") or "未知设备"
+            status = item.get("status") or "未知"
             router_id = item.get("router_id")
             interface = item.get("interface")
-            public_ip = results.get(router_id, {}).get(interface, "Unknown IP")
-            status_text = "OK" if status == "ok" else f"Abnormal ({status})"
+            public_ip = results.get(router_id, {}).get(interface, "未知 IP")
+            status_text = "正常" if status == "ok" else f"异常（{status}）"
 
-            report += f"Device: {product_name}\n"
-            report += f"Status: {status_text}\n"
-            report += f"Router/Interface: {router_id} / {interface}\n"
-            report += f"Current public IP: {public_ip}\n"
+            report += f"设备：{product_name}\n"
+            report += f"状态：{status_text}\n"
+            report += f"路由/接口：{router_id} / {interface}\n"
+            report += f"当前公网 IP：{public_ip}\n"
             report += "-" * 30 + "\n"
 
         return report
 
     def get_devices_list(self) -> List[Dict[str, Any]]:
-        """Return structured devices for Telegram inline buttons."""
+        """返回结构化设备列表，用于 Telegram 按钮。"""
         if not self.login():
             return []
 
@@ -101,7 +101,7 @@ class IPPanelClient:
         for item in data.get("zone_items", []):
             router_id = item.get("router_id")
             interface = item.get("interface")
-            current_ip = results.get(router_id, {}).get(interface, "Unknown")
+            current_ip = results.get(router_id, {}).get(interface, "未知")
             if not router_id or not interface:
                 continue
             devices.append(
@@ -115,9 +115,9 @@ class IPPanelClient:
         return devices
 
     def change_ip(self, router_id: str, interface: str) -> Tuple[bool, str]:
-        """Call the original reconnect endpoint to change IP."""
+        """调用原有 reconnect 接口执行换 IP。"""
         if not self.login():
-            return False, "Login failed."
+            return False, "登录失败。"
 
         payload = {"router_id": router_id, "interface": interface}
         try:
@@ -130,10 +130,10 @@ class IPPanelClient:
                 resp.raise_for_status()
                 result = resp.json()
         except requests.RequestException as exc:
-            return False, f"HTTP request failed: {exc}"
+            return False, f"HTTP 请求失败：{exc}"
         except ValueError:
-            return False, "Invalid JSON response from IPPanel."
+            return False, "IPPanel 返回了无效 JSON。"
 
         if result.get("ok"):
-            return True, str(result.get("new_ip") or "Unknown")
+            return True, str(result.get("new_ip") or "未知")
         return False, str(result)

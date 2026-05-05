@@ -9,7 +9,7 @@ VERSION_FILE="$APP_DIR/VERSION"
 
 need_root() {
   if [ "$(id -u)" -ne 0 ]; then
-    echo "Please run as root: sudo boiltg" >&2
+    echo "请使用 root 执行：sudo boiltg" >&2
     exit 1
   fi
 }
@@ -33,7 +33,7 @@ restart_service() {
 }
 
 service_status() {
-  echo "Local version: $(local_version)"
+  echo "本地版本：$(local_version)"
   echo
   systemctl --no-pager --full status "$APP_NAME" || true
 }
@@ -42,17 +42,17 @@ update_script() {
   local current remote
   current="$(local_version)"
   remote="$(remote_version)"
-  echo "Local version: $current"
-  echo "Remote version: $remote"
+  echo "本地版本：$current"
+  echo "远程版本：$remote"
 
   if version_gt "$remote" "$current"; then
     git -C "$APP_DIR" pull --ff-only origin main
     "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt"
     chmod +x "$APP_DIR/scripts/boiltg.sh" "$APP_DIR/monitor_ip.sh" "$APP_DIR/install.sh"
     restart_service
-    echo "Updated to version $(local_version) and restarted."
+    echo "已更新到版本 $(local_version)，并已重启服务。"
   else
-    echo "Already up to date."
+    echo "当前已是最新版本。"
   fi
 }
 
@@ -73,56 +73,56 @@ set_env_value() {
 modify_config() {
   while true; do
     echo
-    echo "Modify config"
-    echo "1. Modify Telegram Bot Token"
-    echo "2. Modify Telegram User ID"
-    echo "3. Modify IPPanel account"
-    echo "4. Modify IPPanel password"
-    echo "0. Back"
-    read -r -p "Choose: " choice
+    echo "修改配置"
+    echo "1. 修改 Telegram Bot Token"
+    echo "2. 修改 Telegram 用户 ID"
+    echo "3. 修改 IPPanel 账号"
+    echo "4. 修改 IPPanel 密码"
+    echo "0. 返回"
+    read -r -p "请选择： " choice
 
     case "$choice" in
       1)
-        read -r -p "New Telegram Bot Token: " value
+        read -r -p "请输入新的 Telegram Bot Token： " value
         set_env_value "BOT_TOKEN" "$value"
         restart_service
-        echo "Applied and restarted."
+        echo "已保存配置并重启服务。"
         ;;
       2)
-        read -r -p "New Telegram User ID, comma-separated if multiple: " value
+        read -r -p "请输入新的 Telegram 用户 ID，多个用户用英文逗号分隔： " value
         set_env_value "ALLOWED_USERS" "$value"
         restart_service
-        echo "Applied and restarted."
+        echo "已保存配置并重启服务。"
         ;;
       3)
-        read -r -p "New IPPanel account: " value
+        read -r -p "请输入新的 IPPanel 账号： " value
         set_env_value "ACCOUNT" "$value"
         restart_service
-        echo "Applied and restarted."
+        echo "已保存配置并重启服务。"
         ;;
       4)
-        read -r -s -p "New IPPanel password: " value
+        read -r -s -p "请输入新的 IPPanel 密码： " value
         echo
         set_env_value "PASSWORD" "$value"
         restart_service
-        echo "Applied and restarted."
+        echo "已保存配置并重启服务。"
         ;;
       0) return ;;
-      *) echo "Invalid choice." ;;
+      *) echo "无效选择。" ;;
     esac
   done
 }
 
 uninstall_script() {
-  read -r -p "Uninstall service and global command? [y/N]: " confirm
+  read -r -p "确定卸载服务和全局命令吗？[y/N]: " confirm
   case "$confirm" in
     y|Y|yes|YES)
       systemctl disable --now "$APP_NAME" || true
       rm -f "/etc/systemd/system/${APP_NAME}.service" "/usr/local/bin/boiltg"
       systemctl daemon-reload
-      echo "Service and global command removed. Project files remain at: $APP_DIR"
+      echo "服务和全局命令已删除。项目文件仍保留在：$APP_DIR"
       ;;
-    *) echo "Canceled." ;;
+    *) echo "已取消。" ;;
   esac
 }
 
@@ -130,12 +130,12 @@ main_menu() {
   while true; do
     echo
     echo "Boil Change IP"
-    echo "1. Update script"
-    echo "2. Modify config"
-    echo "3. Uninstall script"
-    echo "4. View script status"
-    echo "0. Exit"
-    read -r -p "Choose: " choice
+    echo "1. 更新脚本"
+    echo "2. 修改配置"
+    echo "3. 卸载脚本"
+    echo "4. 查看脚本状态"
+    echo "0. 退出"
+    read -r -p "请选择： " choice
 
     case "$choice" in
       1) update_script ;;
@@ -143,7 +143,7 @@ main_menu() {
       3) uninstall_script ;;
       4) service_status ;;
       0) exit 0 ;;
-      *) echo "Invalid choice." ;;
+      *) echo "无效选择。" ;;
     esac
   done
 }

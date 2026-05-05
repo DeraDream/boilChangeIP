@@ -1,76 +1,76 @@
 # Boil Change IP
 
-Telegram bot for querying IPPanel devices, changing device IPs, and generating current IP quality reports.
+这是一个用于管理 IPPanel 换 IP 的 Telegram 机器人，支持查询设备当前公网 IP、点击设备立即换 IP，以及生成当前 IP 质量检测图片。
 
-## Features
+## 功能
 
-- Query IPPanel device name, status, interface, and current public IP.
-- Change IP through the original IPPanel `/api/reconnect` endpoint.
-- Telegram inline menu:
-  - Bot status
-  - Device list and click-to-change-IP
-  - Current IP quality report PNG
-- Global VPS command: `boiltg`
-  - Update script
-  - Modify config
-  - Uninstall script
-  - View script status
-- Version-aware update. The menu compares local `VERSION` with remote `origin/main:VERSION`; if the remote version is newer, it pulls the latest code, installs dependencies, and restarts the service.
+- 查询 IPPanel 设备名称、状态、接口和当前公网 IP。
+- 保持原有换 IP 逻辑，通过 IPPanel `/api/reconnect` 接口执行换 IP。
+- Telegram 机器人菜单：
+  - Bot 状态
+  - 获取列表并点击设备立即换 IP
+  - 获取当前 IP 质量图片
+- VPS 全局命令：`boiltg`
+  - 更新脚本
+  - 修改配置
+  - 卸载脚本
+  - 查看脚本状态
+- 支持版本号更新。菜单会比较本地 `VERSION` 和远程 `origin/main:VERSION`，远程版本更高时自动拉取最新代码、安装依赖并重启服务。
 
-## One-command install on VPS
+## VPS 一键安装
 
-Run as root on a Linux VPS:
+在 Linux VPS 上使用 root 执行：
 
 ```bash
 apt-get update && apt-get install -y git curl && mkdir -p /opt && cd /opt && git clone git@github.com:DeraDream/boilChangeIP.git boil-change-ip && cd boil-change-ip && bash install.sh
 ```
 
-If your VPS only has HTTPS access to GitHub:
+如果 VPS 只能使用 HTTPS 访问 GitHub，可以用下面这个命令：
 
 ```bash
 apt-get update && apt-get install -y git curl && mkdir -p /opt && cd /opt && git clone https://github.com/DeraDream/boilChangeIP.git boil-change-ip && cd boil-change-ip && bash install.sh
 ```
 
-The installer will ask for:
+安装脚本会依次询问：
 
-- IPPanel account
-- IPPanel password
+- IPPanel 账号
+- IPPanel 密码
 - Telegram Bot Token
-- Telegram User ID
+- Telegram 用户 ID
 
-After installation, the bot service starts automatically.
+安装完成后，Bot 服务会自动加入 systemd 并启动。
 
-## Global menu
+## 全局菜单
 
-After installation:
+安装后，在 VPS 任意位置执行：
 
 ```bash
 boiltg
 ```
 
-Menu:
+菜单如下：
 
 ```text
-1. Update script
-2. Modify config
-3. Uninstall script
-4. View script status
-0. Exit
+1. 更新脚本
+2. 修改配置
+3. 卸载脚本
+4. 查看脚本状态
+0. 退出
 ```
 
-The config submenu:
+修改配置的二级菜单：
 
 ```text
-1. Modify Telegram Bot Token
-2. Modify Telegram User ID
-3. Modify IPPanel account
-4. Modify IPPanel password
-0. Back
+1. 修改 Telegram Bot Token
+2. 修改 Telegram 用户 ID
+3. 修改 IPPanel 账号
+4. 修改 IPPanel 密码
+0. 返回
 ```
 
-Every config change is applied immediately and the service is restarted.
+每次修改配置后都会立即保存，并自动重启 Bot 服务使配置生效。
 
-## Telegram commands
+## Telegram 命令
 
 ```text
 /start
@@ -80,19 +80,19 @@ Every config change is applied immediately and the service is restarted.
 /ip_change
 ```
 
-`/menu` opens the bot menu.
+`/menu` 打开 Bot 菜单。
 
-`Device list / change IP` fetches the same device list as `/list`, shows device names and current IPs, and changes IP immediately after a device button is clicked.
+`获取列表/更换 IP` 会拉取和 `/list` 相同的设备列表，显示设备名称和当前 IP。点击设备按钮后会立即执行换 IP。
 
-`Current IP quality` runs:
+`获取当前 IP 质量` 会执行：
 
 ```bash
 bash <(curl -sL IP.Check.Place) -4 -E
 ```
 
-It captures ANSI output, renders a PNG with `ansilove`, and sends the image back to Telegram.
+脚本会捕获 ANSI 输出，用 `ansilove` 生成 PNG 图片，并把图片发送回 Telegram。
 
-## Service commands
+## 服务命令
 
 ```bash
 systemctl status boil-change-ip
@@ -100,12 +100,12 @@ systemctl restart boil-change-ip
 journalctl -u boil-change-ip -f
 ```
 
-## Files
+## 文件说明
 
-- `bot_main.py`: Telegram bot entrypoint.
-- `api_client.py`: IPPanel API client.
-- `monitor_ip.sh`: IP quality image generator and optional Telegram notifier.
-- `install.sh`: interactive installer.
-- `scripts/boiltg.sh`: global management menu.
-- `.env`: local runtime config, created by installer and ignored by Git.
-- `VERSION`: project version used for update comparison.
+- `bot_main.py`：Telegram Bot 主程序。
+- `api_client.py`：IPPanel API 客户端。
+- `monitor_ip.sh`：IP 质量图片生成脚本，也支持可选 Telegram 通知。
+- `install.sh`：交互式安装脚本。
+- `scripts/boiltg.sh`：VPS 全局管理菜单。
+- `.env`：本地运行配置，由安装脚本创建，不会提交到 Git。
+- `VERSION`：项目版本号，用于判断是否需要更新。

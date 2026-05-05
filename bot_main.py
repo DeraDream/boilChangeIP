@@ -21,7 +21,7 @@ ACCOUNT = env.get("ACCOUNT", "")
 PASSWORD = env.get("PASSWORD", "")
 
 if not BOT_TOKEN:
-    raise SystemExit("BOT_TOKEN is missing. Run ./install.sh or boiltg to configure.")
+    raise SystemExit("缺少 BOT_TOKEN，请运行 ./install.sh 或 boiltg 进行配置。")
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
 api = IPPanelClient(ACCOUNT, PASSWORD)
@@ -32,9 +32,9 @@ user_states: Dict[int, Dict[str, Any]] = {}
 def main_menu() -> InlineKeyboardMarkup:
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(
-        InlineKeyboardButton("1. Bot status", callback_data="menu_status"),
-        InlineKeyboardButton("2. Device list / change IP", callback_data="menu_devices"),
-        InlineKeyboardButton("3. Current IP quality", callback_data="menu_quality"),
+        InlineKeyboardButton("1. Bot 状态", callback_data="menu_status"),
+        InlineKeyboardButton("2. 获取列表/更换 IP", callback_data="menu_devices"),
+        InlineKeyboardButton("3. 获取当前 IP 质量", callback_data="menu_quality"),
     )
     return markup
 
@@ -60,12 +60,12 @@ def check_permission(func: Callable[..., Any]) -> Callable[..., Any]:
             is_call = False
 
         if user_id not in ALLOWED_USERS:
-            text = f"Access denied. Your Telegram User ID is: {user_id}"
+            text = f"拒绝访问。你的 Telegram 用户 ID 是：{user_id}"
             if is_call:
                 bot.answer_callback_query(message_or_call.id, text, show_alert=True)
             else:
                 bot.send_message(chat_id, text)
-            print(f"[security] blocked unauthorized user: {user_id}")
+            print(f"[安全] 已拦截未授权用户：{user_id}")
             return None
 
         return func(message_or_call, *args, **kwargs)
@@ -96,7 +96,7 @@ def safe_edit(call, text: str, reply_markup=None, parse_mode=None):
 def send_welcome(message):
     bot.send_message(
         message.chat.id,
-        "Boil Change IP bot is online. Choose an action:",
+        "Boil Change IP Bot 已在线，请选择操作：",
         reply_markup=main_menu(),
     )
 
@@ -104,7 +104,7 @@ def send_welcome(message):
 @bot.message_handler(commands=["list"])
 @check_permission
 def handle_list(message):
-    bot.reply_to(message, "Fetching device data, please wait...")
+    bot.reply_to(message, "正在获取设备数据，请稍候...")
     bot.send_message(message.chat.id, api.get_formatted_status())
 
 
@@ -117,7 +117,7 @@ def handle_ip_change(message):
 def send_devices_for_change(chat_id: int, call=None):
     devices = api.get_devices_list()
     if not devices:
-        text = "No devices were found, or IPPanel login failed."
+        text = "未获取到设备，或 IPPanel 登录失败。"
         if call:
             safe_edit(call, text)
         else:
@@ -125,10 +125,10 @@ def send_devices_for_change(chat_id: int, call=None):
         return
 
     user_states[chat_id] = {"devices_cache": devices}
-    lines = ["Device list. Click a device to change IP immediately.", ""]
+    lines = ["设备列表如下，点击设备按钮后会立即执行换 IP。", ""]
     for idx, dev in enumerate(devices, start=1):
         lines.append(f"{idx}. {dev['name']}")
-        lines.append(f"   Current IP: {dev['current_ip']}")
+        lines.append(f"   当前 IP：{dev['current_ip']}")
     text = "\n".join(lines)
     if call:
         safe_edit(call, text, reply_markup=device_markup(devices))
@@ -140,10 +140,10 @@ def send_devices_for_change(chat_id: int, call=None):
 @check_permission
 def handle_menu_status(call):
     text = (
-        "Bot status: running\n"
-        f"Version: {get_version()}\n"
-        f"Allowed users: {', '.join(str(x) for x in ALLOWED_USERS) or 'none'}\n"
-        f"IPPanel account: {ACCOUNT or 'not configured'}"
+        "Bot 状态：运行中\n"
+        f"版本：{get_version()}\n"
+        f"授权用户：{', '.join(str(x) for x in ALLOWED_USERS) or '未配置'}\n"
+        f"IPPanel 账号：{ACCOUNT or '未配置'}"
     )
     safe_edit(call, text, reply_markup=main_menu())
     bot.answer_callback_query(call.id)
@@ -152,15 +152,15 @@ def handle_menu_status(call):
 @bot.callback_query_handler(func=lambda call: call.data == "menu_devices")
 @check_permission
 def handle_menu_devices(call):
-    bot.answer_callback_query(call.id, "Fetching devices...")
+    bot.answer_callback_query(call.id, "正在获取设备...")
     send_devices_for_change(call.message.chat.id, call=call)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "menu_quality")
 @check_permission
 def handle_menu_quality(call):
-    bot.answer_callback_query(call.id, "Running IP quality check...")
-    safe_edit(call, "Running IP quality check. This may take a minute...")
+    bot.answer_callback_query(call.id, "正在检测 IP 质量...")
+    safe_edit(call, "正在检测当前 IP 质量，可能需要等待一分钟...")
     send_ip_quality(call.message.chat.id)
 
 
@@ -175,12 +175,12 @@ def handle_change_now(call):
         dev_idx = int(call.data.rsplit("_", 1)[1])
         device = devices[dev_idx]
     except (ValueError, IndexError, KeyError, TypeError):
-        bot.answer_callback_query(call.id, "Device cache expired. Refreshing list.")
+        bot.answer_callback_query(call.id, "设备缓存已过期，正在刷新列表。")
         send_devices_for_change(chat_id, call=call)
         return
 
-    bot.answer_callback_query(call.id, "Changing IP...")
-    safe_edit(call, f"Changing IP for {device['name']}...")
+    bot.answer_callback_query(call.id, "正在更换 IP...")
+    safe_edit(call, f"正在为 {device['name']} 更换 IP...")
     execute_ip_change(chat_id, device)
     user_states.pop(chat_id, None)
 
@@ -188,22 +188,22 @@ def handle_change_now(call):
 def execute_ip_change(chat_id: int, device: dict[str, Any]):
     router_id = device["router_id"]
     interface = device["interface"]
-    old_ip = device.get("current_ip", "Unknown")
+    old_ip = device.get("current_ip", "未知")
 
     success, result = api.change_ip(router_id, interface)
 
     if success:
         text = (
-            "<b>IP change succeeded</b>\n\n"
-            f"Device: {html.escape(str(device['name']))}\n"
-            f"Old IP: <code>{html.escape(str(old_ip))}</code>\n"
-            f"New IP: <code>{html.escape(str(result))}</code>"
+            "<b>IP 更换成功</b>\n\n"
+            f"设备：{html.escape(str(device['name']))}\n"
+            f"旧 IP：<code>{html.escape(str(old_ip))}</code>\n"
+            f"新 IP：<code>{html.escape(str(result))}</code>"
         )
     else:
         text = (
-            "<b>IP change failed</b>\n\n"
-            f"Device: {html.escape(str(device['name']))}\n"
-            f"Reason: {html.escape(str(result))}"
+            "<b>IP 更换失败</b>\n\n"
+            f"设备：{html.escape(str(device['name']))}\n"
+            f"原因：{html.escape(str(result))}"
         )
 
     bot.send_message(chat_id, text, parse_mode="HTML")
@@ -212,7 +212,7 @@ def execute_ip_change(chat_id: int, device: dict[str, Any]):
 
 def send_ip_quality(chat_id: int):
     if not MONITOR_SCRIPT.exists():
-        bot.send_message(chat_id, f"Monitor script not found: {MONITOR_SCRIPT}")
+        bot.send_message(chat_id, f"未找到检测脚本：{MONITOR_SCRIPT}")
         return
 
     try:
@@ -224,25 +224,25 @@ def send_ip_quality(chat_id: int):
             timeout=180,
         )
     except FileNotFoundError:
-        bot.send_message(chat_id, "bash was not found. Please run this on a Linux VPS.")
+        bot.send_message(chat_id, "未找到 bash，请在 Linux VPS 上运行。")
         return
     except subprocess.TimeoutExpired:
-        bot.send_message(chat_id, "IP quality check timed out.")
+        bot.send_message(chat_id, "IP 质量检测超时。")
         return
 
     if result.returncode != 0:
-        output = (result.stderr or result.stdout or "unknown error").strip()
-        bot.send_message(chat_id, f"IP quality check failed:\n{output[-3500:]}")
+        output = (result.stderr or result.stdout or "未知错误").strip()
+        bot.send_message(chat_id, f"IP 质量检测失败：\n{output[-3500:]}")
         return
 
     png_path = Path(result.stdout.strip().splitlines()[-1])
     if not png_path.exists():
-        bot.send_message(chat_id, "IP quality check finished, but no PNG was generated.")
+        bot.send_message(chat_id, "IP 质量检测已结束，但未生成 PNG 图片。")
         return
 
     try:
         with png_path.open("rb") as photo:
-            bot.send_photo(chat_id, photo, caption="Current IP quality report")
+            bot.send_photo(chat_id, photo, caption="当前 IP 质量报告")
     finally:
         try:
             png_path.unlink()
@@ -258,5 +258,5 @@ def run_scheduler():
 
 if __name__ == "__main__":
     threading.Thread(target=run_scheduler, daemon=True).start()
-    print(f"Boil Change IP bot started. Version: {get_version()}")
+    print(f"Boil Change IP Bot 已启动，版本：{get_version()}")
     bot.infinity_polling(skip_pending=True)
