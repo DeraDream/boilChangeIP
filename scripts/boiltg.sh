@@ -88,8 +88,7 @@ update_script() {
     log_msg "正在清理本地旧文件，用户配置 .env 和虚拟环境 .venv 会保留。"
     git -C "$APP_DIR" clean -fd 2>&1 | tee -a "$UPDATE_LOG_FILE"
 
-    log_msg "正在替换本地项目文件为远程版本。"
-    git -C "$APP_DIR" checkout -B main origin/main 2>&1 | tee -a "$UPDATE_LOG_FILE"
+    log_msg "正在强制替换本地项目文件为远程版本。"
     git -C "$APP_DIR" reset --hard origin/main 2>&1 | tee -a "$UPDATE_LOG_FILE"
     git -C "$APP_DIR" clean -fd 2>&1 | tee -a "$UPDATE_LOG_FILE"
 
