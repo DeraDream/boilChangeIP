@@ -3,6 +3,12 @@ set -Eeuo pipefail
 
 export TZ="${TZ:-Asia/Shanghai}"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_BIN="${PYTHON_BIN:-$SCRIPT_DIR/.venv/bin/python}"
+if [ ! -x "$PYTHON_BIN" ]; then
+  PYTHON_BIN="$(command -v python3 || true)"
+fi
+
 IP_LOG_FILE="${IP_LOG_FILE:-/var/lib/boil-change-ip/current_ip}"
 IMAGE_DIR="${IMAGE_DIR:-/tmp/boil-change-ip}"
 LOG_FILE="${LOG_FILE:-/var/log/boil-change-ip-monitor.log}"
@@ -44,7 +50,7 @@ check_quality_dependencies() {
   command -v dig >/dev/null 2>&1 || QUALITY_MISSING+=("dnsutils/dig")
   command -v ip >/dev/null 2>&1 || QUALITY_MISSING+=("iproute2/ip")
   command -v nc >/dev/null 2>&1 || QUALITY_MISSING+=("netcat/nc")
-  python3 -c "import PIL" >/dev/null 2>&1 || QUALITY_MISSING+=("python3-pillow")
+  "$PYTHON_BIN" -c "import PIL" >/dev/null 2>&1 || QUALITY_MISSING+=("pillow")
   if ! find /usr/share/fonts -iname '*Noto*Sans*CJK*' -o -iname '*wqy*' 2>/dev/null | grep -q .; then
     QUALITY_MISSING+=("fonts-noto-cjk")
   fi
@@ -124,12 +130,12 @@ render_png() {
   local ansi_file="$1"
   local png_file="$2"
 
-  if ! python3 -c "import PIL" >/dev/null 2>&1; then
+  if ! "$PYTHON_BIN" -c "import PIL" >/dev/null 2>&1; then
     echo "生成 PNG 图片需要安装 Python Pillow。" >&2
     return 1
   fi
 
-  python3 "$(dirname "$0")/scripts/render_ansi_png.py" "$ansi_file" "$png_file"
+  "$PYTHON_BIN" "$SCRIPT_DIR/scripts/render_ansi_png.py" "$ansi_file" "$png_file"
 }
 
 send_telegram() {
