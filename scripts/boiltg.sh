@@ -60,6 +60,7 @@ check_runtime_dependencies() {
   command -v bc >/dev/null 2>&1 || RUNTIME_MISSING+=("bc")
   command -v dig >/dev/null 2>&1 || RUNTIME_MISSING+=("dnsutils/dig")
   command -v ip >/dev/null 2>&1 || RUNTIME_MISSING+=("iproute2/ip")
+  command -v iptables >/dev/null 2>&1 || RUNTIME_MISSING+=("iptables")
   command -v nc >/dev/null 2>&1 || RUNTIME_MISSING+=("netcat/nc")
   if ! find /usr/share/fonts -iname '*Noto*Sans*CJK*' -o -iname '*wqy*' 2>/dev/null | grep -q .; then
     RUNTIME_MISSING+=("fonts-noto-cjk")
@@ -84,18 +85,18 @@ install_runtime_dependencies() {
   local pkg_manager="$1"
   case "$pkg_manager" in
     apt)
-      log_msg "正在安装/补齐系统依赖：python3 python3-venv python3-pip curl git jq bc dnsutils iproute2 netcat-openbsd fonts-noto-cjk"
+      log_msg "正在安装/补齐系统依赖：python3 python3-venv python3-pip curl git jq bc dnsutils iproute2 iptables netcat-openbsd fonts-noto-cjk"
       apt-get update 2>&1 | tee -a "$UPDATE_LOG_FILE"
       DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        python3 python3-venv python3-pip curl git jq bc dnsutils iproute2 netcat-openbsd fonts-noto-cjk 2>&1 | tee -a "$UPDATE_LOG_FILE"
+        python3 python3-venv python3-pip curl git jq bc dnsutils iproute2 iptables netcat-openbsd fonts-noto-cjk 2>&1 | tee -a "$UPDATE_LOG_FILE"
       ;;
     dnf)
-      log_msg "正在安装/补齐系统依赖：python3 python3-pip curl git jq bc bind-utils iproute nmap-ncat google-noto-sans-cjk-fonts"
-      dnf install -y python3 python3-pip curl git jq bc bind-utils iproute nmap-ncat google-noto-sans-cjk-fonts 2>&1 | tee -a "$UPDATE_LOG_FILE"
+      log_msg "正在安装/补齐系统依赖：python3 python3-pip curl git jq bc bind-utils iproute iptables nmap-ncat google-noto-sans-cjk-fonts"
+      dnf install -y python3 python3-pip curl git jq bc bind-utils iproute iptables nmap-ncat google-noto-sans-cjk-fonts 2>&1 | tee -a "$UPDATE_LOG_FILE"
       ;;
     yum)
-      log_msg "正在安装/补齐系统依赖：python3 python3-pip curl git jq bc bind-utils iproute nmap-ncat google-noto-sans-cjk-fonts"
-      yum install -y python3 python3-pip curl git jq bc bind-utils iproute nmap-ncat google-noto-sans-cjk-fonts 2>&1 | tee -a "$UPDATE_LOG_FILE"
+      log_msg "正在安装/补齐系统依赖：python3 python3-pip curl git jq bc bind-utils iproute iptables nmap-ncat google-noto-sans-cjk-fonts"
+      yum install -y python3 python3-pip curl git jq bc bind-utils iproute iptables nmap-ncat google-noto-sans-cjk-fonts 2>&1 | tee -a "$UPDATE_LOG_FILE"
       ;;
     *)
       return 1
@@ -312,6 +313,10 @@ reset_runtime_data() {
   "$APP_DIR/.venv/bin/python" "$APP_DIR/scripts/ss_cli.py" reset
 }
 
+set_tg_notify() {
+  "$APP_DIR/.venv/bin/python" "$APP_DIR/scripts/ss_cli.py" notify
+}
+
 main_menu() {
   while true; do
     echo
@@ -324,6 +329,7 @@ main_menu() {
     echo "6. 用户管理"
     echo "7. 删除用户"
     echo "8. 初始化脚本"
+    echo "9. TG通知"
     echo "0. 退出"
     read -r -p "请选择： " choice
 
@@ -336,6 +342,7 @@ main_menu() {
       6) manage_ss_users ;;
       7) delete_ss_user ;;
       8) reset_runtime_data ;;
+      9) set_tg_notify ;;
       0) exit 0 ;;
       *) echo "无效选择。" ;;
     esac

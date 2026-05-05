@@ -7,6 +7,7 @@ import shutil
 import socket
 import sqlite3
 import subprocess
+import calendar
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -24,7 +25,6 @@ SINGBOX_CONFIG = Path("/etc/sing-box/boil-change-ip.json")
 SINGBOX_SERVICE = Path("/etc/systemd/system/sing-box-boil.service")
 SS_METHOD = "2022-blake3-aes-128-gcm"
 DEFAULT_TRAFFIC_GB = 100
-DEFAULT_SPEED = "不限速"
 PORT_MIN = 30000
 PORT_MAX = 60000
 
@@ -74,15 +74,47 @@ def init_db() -> None:
                 method TEXT NOT NULL,
                 password TEXT NOT NULL,
                 expire_at TEXT NOT NULL,
+                expire_disable_enabled INTEGER NOT NULL DEFAULT 1,
                 traffic_limit_gb INTEGER NOT NULL DEFAULT 100,
-                speed_limit TEXT NOT NULL DEFAULT '不限速',
+                inbound_baseline_bytes INTEGER NOT NULL DEFAULT 0,
+                outbound_baseline_bytes INTEGER NOT NULL DEFAULT 0,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+        migrate_db(conn)
         conn.commit()
+
+
+def migrate_db(conn: sqlite3.Connection) -> None:
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(ss_users)").fetchall()
+    }
+    if "expire_disable_enabled" not in columns:
+        conn.execute(
+            "ALTER TABLE ss_users ADD COLUMN expire_disable_enabled INTEGER NOT NULL DEFAULT 1"
+        )
+    if "speed_limit" in columns:
+        # Kept for old databases; new logic no longer reads or writes it.
+        pass
+    if "inbound_baseline_bytes" not in columns:
+        conn.execute(
+            "ALTER TABLE ss_users ADD COLUMN inbound_baseline_bytes INTEGER NOT NULL DEFAULT 0"
+        )
+    if "outbound_baseline_bytes" not in columns:
+        conn.execute(
+            "ALTER TABLE ss_users ADD COLUMN outbound_baseline_bytes INTEGER NOT NULL DEFAULT 0"
+        )
 
 
 def db() -> sqlite3.Connection:
@@ -220,8 +252,8 @@ def create_user(
     display_name: str,
     port: Optional[int] = None,
     expire_at: Optional[str] = None,
+    expire_disable_enabled: int = 1,
     traffic_limit_gb: int = DEFAULT_TRAFFIC_GB,
-    speed_limit: str = DEFAULT_SPEED,
 ) -> dict[str, Any]:
     init_db()
     port = port or random_port()
@@ -231,7 +263,7 @@ def create_user(
             """
             INSERT INTO ss_users (
                 tg_user_id, tg_username, display_name, port, method, password,
-                expire_at, traffic_limit_gb, speed_limit, enabled, created_at, updated_at
+                expire_at, expire_disable_enabled, traffic_limit_gb, enabled, created_at, updated_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
             """,
@@ -243,8 +275,8 @@ def create_user(
                 SS_METHOD,
                 generate_password(),
                 expire_at,
+                int(expire_disable_enabled),
                 int(traffic_limit_gb),
-                speed_limit or DEFAULT_SPEED,
                 now_text(),
                 now_text(),
             ),
@@ -257,7 +289,13 @@ def create_user(
 
 
 def update_user(user_id: int, **updates: Any) -> None:
-    allowed = {"expire_at", "traffic_limit_gb", "speed_limit", "display_name", "enabled"}
+    allowed = {
+        "expire_at",
+        "expire_disable_enabled",
+        "traffic_limit_gb",
+        "display_name",
+        "enabled",
+    }
     items = [(key, value) for key, value in updates.items() if key in allowed]
     if not items:
         return
@@ -285,22 +323,83 @@ def delete_user(user_id: int) -> Optional[dict[str, Any]]:
     return user
 
 
+def add_one_month(date_text: str) -> str:
+    source = datetime.strptime(date_text, "%Y-%m-%d")
+    month = source.month + 1
+    year = source.year
+    if month > 12:
+        month = 1
+        year += 1
+    day = min(source.day, calendar.monthrange(year, month)[1])
+    return datetime(year, month, day).strftime("%Y-%m-%d")
+
+
+def roll_date_forward(date_text: str, today: str) -> str:
+    next_date = date_text
+    while next_date < today:
+        next_date = add_one_month(next_date)
+    return next_date
+
+
 def disable_expired_users() -> int:
     today = datetime.now().strftime("%Y-%m-%d")
     with db() as conn:
         rows = conn.execute(
-            "SELECT id FROM ss_users WHERE enabled = 1 AND expire_at < ?", (today,)
+            """
+            SELECT id FROM ss_users
+            WHERE enabled = 1 AND expire_disable_enabled = 1 AND expire_at < ?
+            """,
+            (today,),
         ).fetchall()
-        if not rows:
-            return 0
-        conn.execute(
-            "UPDATE ss_users SET enabled = 0, updated_at = ? WHERE enabled = 1 AND expire_at < ?",
-            (now_text(), today),
-        )
-        conn.commit()
-    render_singbox_config()
-    restart_singbox()
+        if rows:
+            conn.execute(
+                """
+                UPDATE ss_users
+                SET enabled = 0, updated_at = ?
+                WHERE enabled = 1 AND expire_disable_enabled = 1 AND expire_at < ?
+                """,
+                (now_text(), today),
+            )
+            conn.commit()
+
+    renew_monthly_users(today)
+    if rows:
+        render_singbox_config()
+        restart_singbox()
     return len(rows)
+
+
+def renew_monthly_users(today: str) -> int:
+    renewed = 0
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM ss_users
+            WHERE enabled = 1 AND expire_disable_enabled = 0 AND expire_at < ?
+            """,
+            (today,),
+        ).fetchall()
+        for row in rows:
+            user = dict(row)
+            raw = get_user_traffic_raw(user)
+            conn.execute(
+                """
+                UPDATE ss_users
+                SET expire_at = ?, inbound_baseline_bytes = ?,
+                    outbound_baseline_bytes = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    roll_date_forward(user["expire_at"], today),
+                    raw["inbound_bytes"],
+                    raw["outbound_bytes"],
+                    now_text(),
+                    user["id"],
+                ),
+            )
+            renewed += 1
+        conn.commit()
+    return renewed
 
 
 def reset_all() -> None:
@@ -311,6 +410,7 @@ def reset_all() -> None:
         for path in cache_dir.glob("*"):
             if path.is_file():
                 path.unlink()
+    clear_traffic_rules()
     init_db()
     render_singbox_config()
     restart_singbox()
@@ -345,6 +445,7 @@ def render_singbox_config() -> None:
     tmp.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
     shutil.move(str(tmp), str(SINGBOX_CONFIG))
     write_singbox_service()
+    ensure_traffic_rules()
 
 
 def write_singbox_service() -> None:
@@ -376,8 +477,220 @@ def restart_singbox() -> None:
     subprocess.run(["systemctl", "restart", "sing-box-boil"], check=False)
 
 
+def iptables_bins() -> list[str]:
+    return [name for name in ("iptables", "ip6tables") if shutil.which(name)]
+
+
+def ensure_chain(bin_name: str, chain: str, parent: str) -> None:
+    subprocess.run([bin_name, "-w", "-N", chain], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    check = subprocess.run([bin_name, "-w", "-C", parent, "-j", chain], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if check.returncode != 0:
+        subprocess.run([bin_name, "-w", "-I", parent, "1", "-j", chain], check=False)
+
+
+def ensure_rule(bin_name: str, chain: str, port: int, direction: str, comment: str) -> None:
+    port_flag = "--dport" if direction == "in" else "--sport"
+    check = subprocess.run(
+        [
+            bin_name,
+            "-w",
+            "-C",
+            chain,
+            "-p",
+            "tcp",
+            port_flag,
+            str(port),
+            "-m",
+            "comment",
+            "--comment",
+            comment,
+            "-j",
+            "RETURN",
+        ],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if check.returncode != 0:
+        subprocess.run(
+            [
+                bin_name,
+                "-w",
+                "-A",
+                chain,
+                "-p",
+                "tcp",
+                port_flag,
+                str(port),
+                "-m",
+                "comment",
+                "--comment",
+                comment,
+                "-j",
+                "RETURN",
+            ],
+            check=False,
+        )
+
+
+def ensure_traffic_rules() -> None:
+    users = list_users()
+    for bin_name in iptables_bins():
+        ensure_chain(bin_name, "BOIL_SS_IN", "INPUT")
+        ensure_chain(bin_name, "BOIL_SS_OUT", "OUTPUT")
+        for user in users:
+            ensure_rule(bin_name, "BOIL_SS_IN", int(user["port"]), "in", f"boil_ss_user_{user['id']}_in")
+            ensure_rule(bin_name, "BOIL_SS_OUT", int(user["port"]), "out", f"boil_ss_user_{user['id']}_out")
+
+
+def clear_traffic_rules() -> None:
+    for bin_name in iptables_bins():
+        for parent, chain in (("INPUT", "BOIL_SS_IN"), ("OUTPUT", "BOIL_SS_OUT")):
+            while True:
+                result = subprocess.run(
+                    [bin_name, "-w", "-D", parent, "-j", chain],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                if result.returncode != 0:
+                    break
+            subprocess.run(
+                [bin_name, "-w", "-F", chain],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            subprocess.run(
+                [bin_name, "-w", "-X", chain],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+
+def read_counter(comment: str) -> int:
+    total = 0
+    for bin_name in iptables_bins():
+        save_bin = f"{bin_name}-save"
+        if not shutil.which(save_bin):
+            continue
+        result = subprocess.run(
+            [save_bin, "-c"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            continue
+        for line in result.stdout.splitlines():
+            if comment not in line:
+                continue
+            if not line.startswith("[") or "]" not in line:
+                continue
+            counters = line.split("]", 1)[0].strip("[")
+            parts = counters.split(":")
+            if len(parts) == 2 and parts[1].isdigit():
+                total += int(parts[1])
+    return total
+
+
+def single_way_bytes(usage: dict[str, int]) -> int:
+    return max(usage["inbound_bytes"], usage["outbound_bytes"])
+
+
+def traffic_limit_bytes(user: dict[str, Any]) -> int:
+    return int(user["traffic_limit_gb"]) * 1024**3
+
+
 def traffic_text(user: dict[str, Any]) -> str:
-    return "暂未启用端口流量计数"
+    usage = get_user_traffic(user)
+    limit_bytes = traffic_limit_bytes(user)
+    single_way = max(usage["inbound_bytes"], usage["outbound_bytes"])
+    percent = (single_way / limit_bytes * 100) if limit_bytes else 0
+    return (
+        f"入站：{format_bytes(usage['inbound_bytes'])}\n"
+        f"出站：{format_bytes(usage['outbound_bytes'])}\n"
+        f"单向计费：{format_bytes(single_way)} / {user['traffic_limit_gb']}GB "
+        f"({percent:.2f}%)"
+    )
+
+
+def format_bytes(value: int) -> str:
+    units = ["B", "KB", "MB", "GB", "TB"]
+    size = float(value)
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            return f"{size:.2f}{unit}"
+        size /= 1024
+
+
+def get_user_traffic_raw(user: dict[str, Any]) -> dict[str, int]:
+    ensure_traffic_rules()
+    user_id = user["id"]
+    return {
+        "inbound_bytes": read_counter(f"boil_ss_user_{user_id}_in"),
+        "outbound_bytes": read_counter(f"boil_ss_user_{user_id}_out"),
+    }
+
+
+def get_user_traffic(user: dict[str, Any]) -> dict[str, int]:
+    raw = get_user_traffic_raw(user)
+    return {
+        "inbound_bytes": max(
+            0, raw["inbound_bytes"] - int(user.get("inbound_baseline_bytes") or 0)
+        ),
+        "outbound_bytes": max(
+            0, raw["outbound_bytes"] - int(user.get("outbound_baseline_bytes") or 0)
+        ),
+    }
+
+
+def enforce_traffic_limits() -> int:
+    disabled = 0
+    users = [user for user in list_users() if int(user.get("enabled", 1))]
+    with db() as conn:
+        for user in users:
+            limit_bytes = traffic_limit_bytes(user)
+            if limit_bytes <= 0:
+                continue
+            usage = get_user_traffic(user)
+            if single_way_bytes(usage) < limit_bytes:
+                continue
+            conn.execute(
+                "UPDATE ss_users SET enabled = 0, updated_at = ? WHERE id = ?",
+                (now_text(), user["id"]),
+            )
+            disabled += 1
+        conn.commit()
+    if disabled:
+        render_singbox_config()
+        restart_singbox()
+    return disabled
+
+
+def traffic_report() -> str:
+    users = list_users()
+    if not users:
+        return "暂无 SS 用户。"
+    total_in = 0
+    total_out = 0
+    lines = ["SS 流量日报", ""]
+    for user in users:
+        usage = get_user_traffic(user)
+        total_in += usage["inbound_bytes"]
+        total_out += usage["outbound_bytes"]
+        single_way = single_way_bytes(usage)
+        lines.append(
+            f"用户 {user['id']}｜{user['display_name']}｜端口 {user['port']}\n"
+            f"入站：{format_bytes(usage['inbound_bytes'])}，"
+            f"出站：{format_bytes(usage['outbound_bytes'])}，"
+            f"单向：{format_bytes(single_way)} / {user['traffic_limit_gb']}GB"
+        )
+    lines.insert(1, f"整体入站：{format_bytes(total_in)}")
+    lines.insert(2, f"整体出站：{format_bytes(total_out)}")
+    lines.insert(3, f"整体单向：{format_bytes(max(total_in, total_out))}")
+    return "\n".join(lines)
 
 
 def format_user(user: dict[str, Any], include_url: bool = False) -> str:
@@ -388,8 +701,8 @@ def format_user(user: dict[str, Any], include_url: bool = False) -> str:
         f"显示名：{user['display_name']}\n"
         f"端口：{user['port']}\n"
         f"到期：{user['expire_at']}\n"
+        f"到期禁用：{'开启' if int(user.get('expire_disable_enabled', 1)) else '关闭'}\n"
         f"月流量：{user['traffic_limit_gb']}GB 单向\n"
-        f"速率：{user['speed_limit']}\n"
         f"状态：{'启用' if user['enabled'] else '禁用'}\n"
         f"流量：{traffic_text(user)}"
     )
@@ -405,8 +718,8 @@ class ApprovalDraft:
     display_name: str
     port: int
     expire_at: str
+    expire_disable_enabled: int
     traffic_limit_gb: int
-    speed_limit: str
 
     def as_text(self) -> str:
         return (
@@ -416,8 +729,8 @@ class ApprovalDraft:
             f"显示名：{self.display_name}\n"
             f"端口：{self.port}\n"
             f"到期日：{self.expire_at}\n"
+            f"到期禁用：{'开启' if self.expire_disable_enabled else '关闭'}\n"
             f"月流量：{self.traffic_limit_gb}GB 单向\n"
-            f"速率：{self.speed_limit}\n\n"
             "点击确认后将创建用户并重载 sing-box。"
         )
 
@@ -429,6 +742,25 @@ def make_draft(tg_user_id: int, tg_username: str) -> ApprovalDraft:
         display_name=(tg_username or f"user_{tg_user_id}").replace("@", ""),
         port=random_port(),
         expire_at=default_expire_date(),
+        expire_disable_enabled=1,
         traffic_limit_gb=DEFAULT_TRAFFIC_GB,
-        speed_limit=DEFAULT_SPEED,
     )
+
+
+def get_setting(key: str, default: str = "") -> str:
+    with db() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return str(row[0]) if row else default
+
+
+def set_setting(key: str, value: str) -> None:
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO settings (key, value)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (key, value),
+        )
+        conn.commit()

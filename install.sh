@@ -51,17 +51,17 @@ install_os_packages() {
     apt)
       log_msg "正在更新 apt 软件源..."
       apt-get update
-      log_msg "正在安装系统依赖：python3 python3-venv python3-pip curl git jq bc dnsutils iproute2 netcat-openbsd fonts-noto-cjk"
+      log_msg "正在安装系统依赖：python3 python3-venv python3-pip curl git jq bc dnsutils iproute2 iptables netcat-openbsd fonts-noto-cjk"
       DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        python3 python3-venv python3-pip curl git jq bc dnsutils iproute2 netcat-openbsd fonts-noto-cjk
+        python3 python3-venv python3-pip curl git jq bc dnsutils iproute2 iptables netcat-openbsd fonts-noto-cjk
       ;;
     dnf)
-      log_msg "正在安装系统依赖：python3 python3-pip curl git jq bc bind-utils iproute nmap-ncat google-noto-sans-cjk-fonts"
-      dnf install -y python3 python3-pip curl git jq bc bind-utils iproute nmap-ncat google-noto-sans-cjk-fonts
+      log_msg "正在安装系统依赖：python3 python3-pip curl git jq bc bind-utils iproute iptables nmap-ncat google-noto-sans-cjk-fonts"
+      dnf install -y python3 python3-pip curl git jq bc bind-utils iproute iptables nmap-ncat google-noto-sans-cjk-fonts
       ;;
     yum)
-      log_msg "正在安装系统依赖：python3 python3-pip curl git jq bc bind-utils iproute nmap-ncat google-noto-sans-cjk-fonts"
-      yum install -y python3 python3-pip curl git jq bc bind-utils iproute nmap-ncat google-noto-sans-cjk-fonts
+      log_msg "正在安装系统依赖：python3 python3-pip curl git jq bc bind-utils iproute iptables nmap-ncat google-noto-sans-cjk-fonts"
+      yum install -y python3 python3-pip curl git jq bc bind-utils iproute iptables nmap-ncat google-noto-sans-cjk-fonts
       ;;
     *)
       log_msg "未识别包管理器，无法自动安装系统依赖。"
@@ -83,6 +83,7 @@ check_dependencies() {
   command -v bc >/dev/null 2>&1 || MISSING_DEPS+=("bc")
   command -v dig >/dev/null 2>&1 || MISSING_DEPS+=("dnsutils/dig")
   command -v ip >/dev/null 2>&1 || MISSING_DEPS+=("iproute2/ip")
+  command -v iptables >/dev/null 2>&1 || MISSING_DEPS+=("iptables")
   command -v nc >/dev/null 2>&1 || MISSING_DEPS+=("netcat/nc")
   if ! find /usr/share/fonts -iname '*Noto*Sans*CJK*' -o -iname '*wqy*' 2>/dev/null | grep -q .; then
     MISSING_DEPS+=("fonts-noto-cjk")

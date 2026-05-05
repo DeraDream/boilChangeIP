@@ -25,17 +25,16 @@ def add_user():
     port_raw = input("请输入端口，留空随机：").strip()
     expire_at = input(f"请输入到期日，留空默认 {ss_manager.default_expire_date()}：").strip() or ss_manager.default_expire_date()
     traffic_raw = input("请输入月流量 GB，留空默认 100：").strip() or "100"
-    speed_limit = input("请输入速率，留空/0 为不限速：").strip()
-    if speed_limit in ("", "0"):
-        speed_limit = "不限速"
+    expire_disable_raw = input("到期后自动禁用？留空默认是，输入 n 关闭：").strip().lower()
+    expire_disable_enabled = 0 if expire_disable_raw in ("n", "no", "0", "否") else 1
     user = ss_manager.create_user(
         tg_user_id=tg_user_id,
         tg_username=tg_username,
         display_name=display_name,
         port=int(port_raw) if port_raw else None,
         expire_at=expire_at,
+        expire_disable_enabled=expire_disable_enabled,
         traffic_limit_gb=int(traffic_raw),
-        speed_limit=speed_limit,
     )
     print("已创建用户：")
     print(ss_manager.format_user(user, include_url=True))
@@ -61,9 +60,26 @@ def reset_all():
     print("已清空所有用户信息表和缓存数据，恢复到初始状态。")
 
 
+def notify_time():
+    current = ss_manager.get_setting("traffic_notify_time", "未设置")
+    print(f"当前通知时间：{current or '未设置'}")
+    value = input("请输入通知时间 HH:MM，输入 off 关闭：").strip()
+    if value.lower() in ("off", "0", "关闭"):
+        ss_manager.set_setting("traffic_notify_time", "")
+        ss_manager.set_setting("traffic_notify_last_date", "")
+        print("已关闭 TG 流量通知。")
+        return
+    import datetime as _dt
+
+    _dt.datetime.strptime(value, "%H:%M")
+    ss_manager.set_setting("traffic_notify_time", value)
+    ss_manager.set_setting("traffic_notify_last_date", "")
+    print(f"已设置 TG 流量通知时间：{value}")
+
+
 def main():
     if len(sys.argv) < 2:
-        print("Usage: ss_cli.py list|add|delete|reset")
+        print("Usage: ss_cli.py list|add|delete|reset|notify")
         return 2
     cmd = sys.argv[1]
     if cmd == "list":
@@ -74,6 +90,8 @@ def main():
         delete_user()
     elif cmd == "reset":
         reset_all()
+    elif cmd == "notify":
+        notify_time()
     else:
         print(f"未知命令：{cmd}")
         return 2

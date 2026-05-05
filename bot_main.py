@@ -43,6 +43,7 @@ BTN_QUALITY = "3. 获取当前 IP 质量"
 BTN_CREATE_USER = "4. 生成用户"
 BTN_USER_MGMT = "5. 用户管理"
 BTN_DELETE_USER = "6. 删除用户"
+BTN_NOTIFY = "7. TG 通知"
 BTN_REQUEST_SS = "申请 SS 链接"
 BTN_MY_SS = "我的链接"
 BTN_CHANGE_IP = "更换 IP"
@@ -59,6 +60,7 @@ def main_menu() -> InlineKeyboardMarkup:
         InlineKeyboardButton(BTN_CREATE_USER, callback_data="menu_create_user"),
         InlineKeyboardButton(BTN_USER_MGMT, callback_data="menu_user_mgmt"),
         InlineKeyboardButton(BTN_DELETE_USER, callback_data="menu_delete_user"),
+        InlineKeyboardButton(BTN_NOTIFY, callback_data="menu_notify"),
     )
     return markup
 
@@ -72,6 +74,7 @@ def reply_menu() -> ReplyKeyboardMarkup:
         KeyboardButton(BTN_CREATE_USER),
         KeyboardButton(BTN_USER_MGMT),
         KeyboardButton(BTN_DELETE_USER),
+        KeyboardButton(BTN_NOTIFY),
     )
     return markup
 
@@ -268,6 +271,12 @@ def handle_reply_delete_user(message):
     send_delete_users(message.chat.id)
 
 
+@bot.message_handler(func=lambda message: message.text == BTN_NOTIFY)
+@check_admin
+def handle_reply_notify(message):
+    send_notify_menu(message.chat.id)
+
+
 def send_my_ss(chat_id: int, tg_user_id: int):
     user = ss_manager.get_user_by_tg(tg_user_id)
     if not user and is_admin(tg_user_id):
@@ -310,8 +319,8 @@ def approval_markup(tg_user_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton("修改端口", callback_data=f"draft_edit_port_{tg_user_id}"),
         InlineKeyboardButton("修改用户名", callback_data=f"draft_edit_name_{tg_user_id}"),
         InlineKeyboardButton("修改到期日", callback_data=f"draft_edit_expire_{tg_user_id}"),
+        InlineKeyboardButton("切换到期禁用", callback_data=f"draft_toggle_expire_disable_{tg_user_id}"),
         InlineKeyboardButton("修改流量", callback_data=f"draft_edit_traffic_{tg_user_id}"),
-        InlineKeyboardButton("修改速率", callback_data=f"draft_edit_speed_{tg_user_id}"),
         InlineKeyboardButton("取消", callback_data=f"draft_cancel_{tg_user_id}"),
     )
     return markup
@@ -330,8 +339,8 @@ def send_user_management(chat_id: int):
         markup = InlineKeyboardMarkup(row_width=2)
         markup.add(
             InlineKeyboardButton("修改到期日", callback_data=f"user_edit_expire_{user['id']}"),
+            InlineKeyboardButton("切换到期禁用", callback_data=f"user_toggle_expire_disable_{user['id']}"),
             InlineKeyboardButton("修改流量", callback_data=f"user_edit_traffic_{user['id']}"),
-            InlineKeyboardButton("修改速率", callback_data=f"user_edit_speed_{user['id']}"),
             InlineKeyboardButton("删除用户", callback_data=f"user_delete_{user['id']}"),
         )
         bot.send_message(chat_id, ss_manager.format_user(user), reply_markup=markup)
@@ -346,6 +355,20 @@ def send_delete_users(chat_id: int):
     for user in users:
         markup.add(InlineKeyboardButton(f"{user['id']}. {user['display_name']} | {user['tg_user_id']}", callback_data=f"user_delete_{user['id']}"))
     bot.send_message(chat_id, "请选择要删除的用户：", reply_markup=markup)
+
+
+def send_notify_menu(chat_id: int):
+    current = ss_manager.get_setting("traffic_notify_time", "未设置")
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("09:00", callback_data="notify_set_09:00"),
+        InlineKeyboardButton("12:00", callback_data="notify_set_12:00"),
+        InlineKeyboardButton("18:00", callback_data="notify_set_18:00"),
+        InlineKeyboardButton("21:00", callback_data="notify_set_21:00"),
+        InlineKeyboardButton("自定义 HH:MM", callback_data="notify_custom"),
+        InlineKeyboardButton("关闭通知", callback_data="notify_off"),
+    )
+    bot.send_message(chat_id, f"选择通知时间\n当前：{current}", reply_markup=markup)
 
 
 def send_devices_for_change(chat_id: int, call=None):
@@ -411,6 +434,33 @@ def handle_menu_user_mgmt(call):
 def handle_menu_delete_user(call):
     bot.answer_callback_query(call.id)
     send_delete_users(call.message.chat.id)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "menu_notify")
+@check_admin
+def handle_menu_notify(call):
+    bot.answer_callback_query(call.id)
+    send_notify_menu(call.message.chat.id)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("notify_"))
+@check_admin
+def handle_notify_actions(call):
+    if call.data == "notify_custom":
+        admin_states[call.from_user.id] = {"mode": "notify_time"}
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, "请输入通知时间，格式 HH:MM，例如 21:30")
+        return
+    if call.data == "notify_off":
+        ss_manager.set_setting("traffic_notify_time", "")
+        bot.answer_callback_query(call.id, "已关闭。")
+        safe_edit(call, "TG 流量通知已关闭。")
+        return
+    value = call.data.replace("notify_set_", "")
+    ss_manager.set_setting("traffic_notify_time", value)
+    ss_manager.set_setting("traffic_notify_last_date", "")
+    bot.answer_callback_query(call.id, "已设置。")
+    safe_edit(call, f"TG 流量通知时间已设置为：{value}")
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "user_change_ip")
@@ -487,8 +537,8 @@ def handle_draft_actions(call):
             display_name=draft.display_name,
             port=draft.port,
             expire_at=draft.expire_at,
+            expire_disable_enabled=draft.expire_disable_enabled,
             traffic_limit_gb=draft.traffic_limit_gb,
-            speed_limit=draft.speed_limit,
         )
         admin_states.pop(call.from_user.id, None)
         bot.answer_callback_query(call.id, "已创建。")
@@ -505,6 +555,13 @@ def handle_draft_actions(call):
         safe_edit(call, "已取消创建。")
         return
 
+    if action == "toggle":
+        draft.expire_disable_enabled = 0 if draft.expire_disable_enabled else 1
+        admin_states[call.from_user.id] = {"mode": "draft", "draft": draft}
+        bot.answer_callback_query(call.id, "已切换。")
+        send_draft(call.message.chat.id, draft)
+        return
+
     field = parts[2]
     admin_states[call.from_user.id] = {"mode": f"draft_edit_{field}", "draft": draft}
     prompt = {
@@ -512,13 +569,16 @@ def handle_draft_actions(call):
         "name": "请输入自定义用户名/显示名：",
         "expire": "请输入到期日，例如 2026-06-05 或 30d：",
         "traffic": "请输入月流量 GB，例如 100：",
-        "speed": "请输入速率，例如 50Mbps；输入 0 表示不限速：",
     }.get(field, "请输入新值：")
     bot.answer_callback_query(call.id)
     bot.send_message(call.message.chat.id, prompt)
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("user_edit_") or call.data.startswith("user_delete_"))
+@bot.callback_query_handler(
+    func=lambda call: call.data.startswith("user_edit_")
+    or call.data.startswith("user_delete_")
+    or call.data.startswith("user_toggle_")
+)
 @check_admin
 def handle_user_actions(call):
     if call.data.startswith("user_delete_"):
@@ -528,13 +588,25 @@ def handle_user_actions(call):
         safe_edit(call, f"已删除用户：{user['display_name']}" if user else "用户不存在。")
         return
 
+    if call.data.startswith("user_toggle_expire_disable_"):
+        user_id = int(call.data.rsplit("_", 1)[1])
+        user = ss_manager.get_user(user_id)
+        if not user:
+            bot.answer_callback_query(call.id, "用户不存在。")
+            return
+        new_value = 0 if int(user.get("expire_disable_enabled", 1)) else 1
+        ss_manager.update_user(user_id, expire_disable_enabled=new_value)
+        user = ss_manager.get_user(user_id)
+        bot.answer_callback_query(call.id, "已切换。")
+        safe_edit(call, "已更新用户：\n\n" + ss_manager.format_user(user))
+        return
+
     _prefix, _edit, field, raw_user_id = call.data.split("_")
     user_id = int(raw_user_id)
     admin_states[call.from_user.id] = {"mode": f"user_edit_{field}", "user_id": user_id}
     prompt = {
         "expire": "请输入新的到期日，例如 2026-06-05 或 30d：",
         "traffic": "请输入新的月流量 GB，例如 100：",
-        "speed": "请输入新的速率，例如 50Mbps；输入 0 表示不限速：",
     }.get(field, "请输入新值：")
     bot.answer_callback_query(call.id)
     bot.send_message(call.message.chat.id, prompt)
@@ -570,8 +642,6 @@ def handle_admin_state_input(message):
                 draft.expire_at = parse_expire_value(value)
             elif field == "traffic":
                 draft.traffic_limit_gb = int(value)
-            elif field == "speed":
-                draft.speed_limit = "不限速" if value in ("0", "不限速", "") else value
             admin_states[message.from_user.id] = {"mode": "draft", "draft": draft}
             send_draft(message.chat.id, draft)
             return
@@ -584,12 +654,17 @@ def handle_admin_state_input(message):
                 updates["expire_at"] = parse_expire_value(value)
             elif field == "traffic":
                 updates["traffic_limit_gb"] = int(value)
-            elif field == "speed":
-                updates["speed_limit"] = "不限速" if value in ("0", "不限速", "") else value
             ss_manager.update_user(user_id, **updates)
             admin_states.pop(message.from_user.id, None)
             user = ss_manager.get_user(user_id)
             bot.send_message(message.chat.id, "已更新用户：\n\n" + ss_manager.format_user(user))
+            return
+        if mode == "notify_time":
+            datetime.strptime(value, "%H:%M")
+            ss_manager.set_setting("traffic_notify_time", value)
+            ss_manager.set_setting("traffic_notify_last_date", "")
+            admin_states.pop(message.from_user.id, None)
+            bot.send_message(message.chat.id, f"TG 流量通知时间已设置为：{value}")
             return
     except Exception as exc:
         bot.send_message(message.chat.id, f"输入无效：{exc}")
@@ -732,8 +807,29 @@ def send_quality_images(chat_id: int, png_path: Path):
 def run_scheduler():
     while True:
         ss_manager.disable_expired_users()
+        ss_manager.enforce_traffic_limits()
+        send_scheduled_traffic_report()
         schedule.run_pending()
         time.sleep(60)
+
+
+def send_scheduled_traffic_report():
+    notify_time = ss_manager.get_setting("traffic_notify_time", "").strip()
+    if not notify_time:
+        return
+    today = datetime.now().strftime("%Y-%m-%d")
+    current_time = datetime.now().strftime("%H:%M")
+    if current_time != notify_time:
+        return
+    if ss_manager.get_setting("traffic_notify_last_date", "") == today:
+        return
+    report = ss_manager.traffic_report()
+    for admin_id in ALLOWED_USERS:
+        try:
+            bot.send_message(admin_id, report)
+        except Exception:
+            pass
+    ss_manager.set_setting("traffic_notify_last_date", today)
 
 
 if __name__ == "__main__":
