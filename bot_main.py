@@ -125,7 +125,11 @@ def send_devices_for_change(chat_id: int, call=None):
         return
 
     user_states[chat_id] = {"devices_cache": devices}
-    text = "Select a device. The IP change will run immediately after you click it."
+    lines = ["Device list. Click a device to change IP immediately.", ""]
+    for idx, dev in enumerate(devices, start=1):
+        lines.append(f"{idx}. {dev['name']}")
+        lines.append(f"   Current IP: {dev['current_ip']}")
+    text = "\n".join(lines)
     if call:
         safe_edit(call, text, reply_markup=device_markup(devices))
     else:
