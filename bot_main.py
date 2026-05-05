@@ -8,7 +8,12 @@ from typing import Any, Callable, Dict
 
 import schedule
 import telebot
-from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
+from telebot.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
 
 from api_client import IPPanelClient
 from config import MONITOR_SCRIPT, get_version, load_env, parse_allowed_users
@@ -28,13 +33,27 @@ api = IPPanelClient(ACCOUNT, PASSWORD)
 
 user_states: Dict[int, Dict[str, Any]] = {}
 
+BTN_STATUS = "1. Bot 状态"
+BTN_DEVICES = "2. 获取列表/更换 IP"
+BTN_QUALITY = "3. 获取当前 IP 质量"
+
 
 def main_menu() -> InlineKeyboardMarkup:
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(
-        InlineKeyboardButton("1. Bot 状态", callback_data="menu_status"),
-        InlineKeyboardButton("2. 获取列表/更换 IP", callback_data="menu_devices"),
-        InlineKeyboardButton("3. 获取当前 IP 质量", callback_data="menu_quality"),
+        InlineKeyboardButton(BTN_STATUS, callback_data="menu_status"),
+        InlineKeyboardButton(BTN_DEVICES, callback_data="menu_devices"),
+        InlineKeyboardButton(BTN_QUALITY, callback_data="menu_quality"),
+    )
+    return markup
+
+
+def reply_menu() -> ReplyKeyboardMarkup:
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    markup.add(
+        KeyboardButton(BTN_STATUS),
+        KeyboardButton(BTN_DEVICES),
+        KeyboardButton(BTN_QUALITY),
     )
     return markup
 
@@ -96,7 +115,12 @@ def safe_edit(call, text: str, reply_markup=None, parse_mode=None):
 def send_welcome(message):
     bot.send_message(
         message.chat.id,
-        "Boil Change IP Bot 已在线，请选择操作：",
+        "Boil Change IP Bot 已在线，底部菜单已启用。",
+        reply_markup=reply_menu(),
+    )
+    bot.send_message(
+        message.chat.id,
+        "也可以在这里选择操作：",
         reply_markup=main_menu(),
     )
 
@@ -112,6 +136,38 @@ def handle_list(message):
 @check_permission
 def handle_ip_change(message):
     send_devices_for_change(message.chat.id)
+
+
+def status_text() -> str:
+    return (
+        "Bot 状态：运行中\n"
+        f"版本：{get_version()}\n"
+        f"授权用户：{', '.join(str(x) for x in ALLOWED_USERS) or '未配置'}\n"
+        f"IPPanel 账号：{ACCOUNT or '未配置'}"
+    )
+
+
+@bot.message_handler(func=lambda message: message.text == BTN_STATUS)
+@check_permission
+def handle_reply_status(message):
+    bot.send_message(message.chat.id, status_text(), reply_markup=reply_menu())
+
+
+@bot.message_handler(func=lambda message: message.text == BTN_DEVICES)
+@check_permission
+def handle_reply_devices(message):
+    send_devices_for_change(message.chat.id)
+
+
+@bot.message_handler(func=lambda message: message.text == BTN_QUALITY)
+@check_permission
+def handle_reply_quality(message):
+    bot.send_message(
+        message.chat.id,
+        "正在检测当前 IP 质量，可能需要等待一分钟...",
+        reply_markup=reply_menu(),
+    )
+    send_ip_quality(message.chat.id)
 
 
 def send_devices_for_change(chat_id: int, call=None):
@@ -139,13 +195,7 @@ def send_devices_for_change(chat_id: int, call=None):
 @bot.callback_query_handler(func=lambda call: call.data == "menu_status")
 @check_permission
 def handle_menu_status(call):
-    text = (
-        "Bot 状态：运行中\n"
-        f"版本：{get_version()}\n"
-        f"授权用户：{', '.join(str(x) for x in ALLOWED_USERS) or '未配置'}\n"
-        f"IPPanel 账号：{ACCOUNT or '未配置'}"
-    )
-    safe_edit(call, text, reply_markup=main_menu())
+    safe_edit(call, status_text(), reply_markup=main_menu())
     bot.answer_callback_query(call.id)
 
 
@@ -231,11 +281,28 @@ def send_ip_quality(chat_id: int):
         return
 
     if result.returncode != 0:
-        output = (result.stderr or result.stdout or "未知错误").strip()
+        log_tail = ""
+        log_file = Path("/var/log/boil-change-ip-monitor.log")
+        if log_file.exists():
+            try:
+                log_tail = "\n\n最近日志：\n" + "\n".join(
+                    log_file.read_text(encoding="utf-8", errors="replace")
+                    .splitlines()[-20:]
+                )
+            except OSError:
+                log_tail = ""
+
+        output = (result.stderr or result.stdout or "检测脚本没有返回错误详情。").strip()
+        output = f"{output}{log_tail}"
         bot.send_message(chat_id, f"IP 质量检测失败：\n{output[-3500:]}")
         return
 
-    png_path = Path(result.stdout.strip().splitlines()[-1])
+    output_lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if not output_lines:
+        bot.send_message(chat_id, "IP 质量检测已结束，但检测脚本没有返回图片路径。")
+        return
+
+    png_path = Path(output_lines[-1])
     if not png_path.exists():
         bot.send_message(chat_id, "IP 质量检测已结束，但未生成 PNG 图片。")
         return

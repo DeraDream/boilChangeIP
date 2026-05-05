@@ -110,17 +110,34 @@ cleanup() {
 trap cleanup EXIT
 
 log "执行 IP.Check.Place -4 -E"
-bash <(curl -sL IP.Check.Place) -4 -E > "$ANSI_FILE" 2>&1
+set +e
+bash <(curl -fsSL IP.Check.Place) -4 -E > "$ANSI_FILE" 2>&1
+CHECK_STATUS=$?
+set -e
 
 if [ ! -s "$ANSI_FILE" ]; then
   echo "IP.Check.Place 未返回有效输出。" >&2
+  if [ "$CHECK_STATUS" -ne 0 ]; then
+    echo "远程检测脚本退出码：$CHECK_STATUS" >&2
+  fi
   exit 1
 fi
 
-render_png "$ANSI_FILE" "$PNG_FILE"
+if [ "$CHECK_STATUS" -ne 0 ]; then
+  log "IP.Check.Place 退出码为 $CHECK_STATUS，但已捕获输出，继续尝试生成图片。"
+fi
+
+if ! render_png "$ANSI_FILE" "$PNG_FILE"; then
+  echo "PNG 图片生成失败。" >&2
+  echo "检测输出最后 40 行：" >&2
+  tail -n 40 "$ANSI_FILE" >&2 || true
+  exit 1
+fi
 
 if [ ! -f "$PNG_FILE" ]; then
   echo "PNG 图片生成失败。" >&2
+  echo "检测输出最后 40 行：" >&2
+  tail -n 40 "$ANSI_FILE" >&2 || true
   exit 1
 fi
 
