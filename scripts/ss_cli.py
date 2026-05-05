@@ -112,7 +112,7 @@ def bind_domain():
     value = input("请输入要绑定的域名：").strip()
     host = ss_manager.normalize_public_host(value)
     confirm = input(f"确认绑定域名 {host}？输入 YES 确认：").strip()
-    if confirm != "YES":
+    if confirm.lower() != "yes":
         print("已取消绑定域名。")
         return
     ss_manager.bind_public_host(host)

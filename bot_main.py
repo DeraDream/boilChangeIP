@@ -53,7 +53,7 @@ admin_states: Dict[int, Dict[str, Any]] = {}
 
 
 def main_menu() -> InlineKeyboardMarkup:
-    markup = InlineKeyboardMarkup(row_width=1)
+    markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
         InlineKeyboardButton(BTN_STATUS, callback_data="menu_status"),
         InlineKeyboardButton(BTN_DEVICES, callback_data="menu_devices"),
@@ -68,7 +68,7 @@ def main_menu() -> InlineKeyboardMarkup:
 
 
 def reply_menu() -> ReplyKeyboardMarkup:
-    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add(
         KeyboardButton(BTN_STATUS),
         KeyboardButton(BTN_DEVICES),
@@ -202,11 +202,32 @@ def handle_ip_change(message):
 
 
 def status_text() -> str:
+    users = ss_manager.list_users()
+    total_in = 0
+    total_out = 0
+    traffic_lines = []
+    for user in users:
+        usage = ss_manager.get_user_traffic(user)
+        total_in += usage["inbound_bytes"]
+        total_out += usage["outbound_bytes"]
+        single = ss_manager.single_way_bytes(usage)
+        traffic_lines.append(
+            f"{user['display_name']}  入站 {ss_manager.format_bytes(usage['inbound_bytes'])} / "
+            f"出站 {ss_manager.format_bytes(usage['outbound_bytes'])} / "
+            f"单向 {ss_manager.format_bytes(single)}"
+        )
+
+    traffic_text = "\n".join(traffic_lines) if traffic_lines else "暂无用户流量。"
     return (
         "Bot 状态：运行中\n"
         f"版本：{get_version()}\n"
         f"授权用户：{', '.join(str(x) for x in ALLOWED_USERS) or '未配置'}\n"
-        f"IPPanel 账号：{ACCOUNT or '未配置'}"
+        f"IPPanel 账号：{ACCOUNT or '未配置'}\n"
+        f"SS 用户数：{len(users)}\n"
+        f"总入站：{ss_manager.format_bytes(total_in)}\n"
+        f"总出站：{ss_manager.format_bytes(total_out)}\n"
+        f"总单向：{ss_manager.format_bytes(max(total_in, total_out))}\n\n"
+        f"用户流量：\n{traffic_text}"
     )
 
 
@@ -665,14 +686,15 @@ def handle_admin_state_input(message):
             }
             bot.send_message(
                 message.chat.id,
-                f"确认绑定域名：{host}\n发送 YES 确认，发送其他内容取消。",
+                f"确认绑定域名：<code>{html.escape(host)}</code>\n发送 YES 确认，发送其他内容取消。",
+                parse_mode="HTML",
             )
             return
 
         if mode == "bind_domain_confirm":
             host = state["domain"]
             admin_states.pop(message.from_user.id, None)
-            if value != "YES":
+            if value.lower() != "yes":
                 bot.send_message(message.chat.id, "已取消绑定域名。")
                 return
             apply_domain_binding(message.chat.id, host)
