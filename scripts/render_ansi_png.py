@@ -56,19 +56,38 @@ def char_width(ch: str) -> int:
     return 1
 
 
-def find_font(size: int) -> ImageFont.FreeTypeFont:
-    candidates = [
-        "/usr/share/fonts/opentype/noto/NotoSansMonoCJK-Regular.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/noto/NotoSansMonoCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-    ]
+def find_font(size: int, candidates: list[str]) -> ImageFont.FreeTypeFont:
     for candidate in candidates:
         if Path(candidate).exists():
             return ImageFont.truetype(candidate, size=size)
     return ImageFont.load_default()
+
+
+def load_fonts(size: int):
+    ascii_font = find_font(
+        size,
+        [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationMono-Regular.ttf",
+        ],
+    )
+    cjk_font = find_font(
+        size,
+        [
+            "/usr/share/fonts/opentype/noto/NotoSansMonoCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansMonoCJK-Regular.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        ],
+    )
+    return ascii_font, cjk_font
+
+
+def choose_font(ch: str, ascii_font, cjk_font):
+    if char_width(ch) == 2:
+        return cjk_font
+    return ascii_font
 
 
 def parse_sgr(params: str, fg, bg, bold):
@@ -181,12 +200,11 @@ def parse_ansi(text: str):
 def render(input_path: Path, output_path: Path):
     text = input_path.read_text(encoding="utf-8", errors="replace")
     lines = parse_ansi(text)
-    font = find_font(16)
-    bold_font = font
+    ascii_font, cjk_font = load_fonts(16)
 
-    bbox = font.getbbox("M")
-    cell_w = 8
-    cell_h = max(19, bbox[3] - bbox[1] + 4)
+    bbox = ascii_font.getbbox("M")
+    cell_w = 9
+    cell_h = max(18, bbox[3] - bbox[1] + 6)
     padding = 10
     max_cols = 1
     for line in lines:
@@ -202,32 +220,16 @@ def render(input_path: Path, output_path: Path):
 
     for row, line in enumerate(lines):
         y = padding + row * cell_h
-        segments = []
-        current = None
         for x, ch, width, fg, bg, bold in line:
-            if current and current["x"] + current["width"] == x and current["fg"] == fg and current["bg"] == bg and current["bold"] == bold:
-                current["text"] += ch
-                current["width"] += width
-            else:
-                current = {
-                    "x": x,
-                    "text": ch,
-                    "width": width,
-                    "fg": fg,
-                    "bg": bg,
-                    "bold": bold,
-                }
-                segments.append(current)
-
-        for segment in segments:
-            px = padding + segment["x"] * cell_w
-            width_px = max(1, segment["width"]) * cell_w
-            draw.rectangle([px, y, px + width_px, y + cell_h], fill=segment["bg"])
+            px = padding + x * cell_w
+            width_px = max(1, width) * cell_w
+            font = choose_font(ch, ascii_font, cjk_font)
+            draw.rectangle([px, y, px + width_px, y + cell_h], fill=bg)
             draw.text(
-                (px, y + 1),
-                segment["text"],
-                font=bold_font if segment["bold"] else font,
-                fill=segment["fg"],
+                (px, y),
+                ch,
+                font=font,
+                fill=fg,
             )
 
     image.save(output_path, "PNG")
