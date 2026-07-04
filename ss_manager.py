@@ -29,11 +29,15 @@ SS_METHOD = "2022-blake3-aes-128-gcm"
 SS2022_METHODS = [
     "2022-blake3-aes-128-gcm",
     "2022-blake3-aes-256-gcm",
+    "2022-blake3-chacha20-poly1305",
 ]
 LEGACY_SS_METHODS = [
+    "none",
     "aes-128-gcm",
+    "aes-192-gcm",
     "aes-256-gcm",
     "chacha20-ietf-poly1305",
+    "xchacha20-ietf-poly1305",
 ]
 SS_METHODS = [*SS2022_METHODS, *LEGACY_SS_METHODS]
 DEFAULT_TRAFFIC_GB = 100
@@ -282,6 +286,8 @@ def generate_password() -> str:
 
 def generate_password_for_method(method: str) -> str:
     if method == "2022-blake3-aes-256-gcm":
+        return base64.b64encode(secrets.token_bytes(32)).decode("ascii")
+    if method == "2022-blake3-chacha20-poly1305":
         return base64.b64encode(secrets.token_bytes(32)).decode("ascii")
     if method == "2022-blake3-aes-128-gcm":
         return base64.b64encode(secrets.token_bytes(16)).decode("ascii")
