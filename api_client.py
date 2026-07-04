@@ -1,8 +1,26 @@
 import threading
 import ipaddress
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+
+
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+def format_beijing_timestamp(value: Any) -> str:
+    try:
+        timestamp = int(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if timestamp > 10_000_000_000:
+        timestamp = timestamp // 1000
+    return (
+        datetime.fromtimestamp(timestamp, UTC)
+        .astimezone(BEIJING_TZ)
+        .strftime("%Y-%m-%d %H:%M:%S 北京时间")
+    )
 
 
 class IPPanelClient:
@@ -100,6 +118,6 @@ class IPPanelClient:
             if uses_left is not None:
                 extras.append(f"剩余次数：{uses_left}")
             if next_allowed_at is not None:
-                extras.append(f"下次可用时间戳：{next_allowed_at}")
+                extras.append(f"下次可用时间：{format_beijing_timestamp(next_allowed_at)}")
             return True, "\n".join([message, *extras])
         return False, str(result.get("error") or result)
