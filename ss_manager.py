@@ -50,7 +50,28 @@ def now_text() -> str:
 
 
 def default_expire_date() -> str:
-    return (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+    return add_months(datetime.now(), 1).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def add_months(source: datetime, months: int) -> datetime:
+    month = source.month - 1 + months
+    year = source.year + month // 12
+    month = month % 12 + 1
+    day = min(source.day, calendar.monthrange(year, month)[1])
+    return source.replace(year=year, month=month, day=day)
+
+
+def duration_expire_at(unit: str, amount: int) -> str:
+    now = datetime.now().replace(microsecond=0)
+    if unit == "month":
+        return add_months(now, amount).strftime("%Y-%m-%d %H:%M:%S")
+    if unit == "day":
+        return (now + timedelta(days=amount)).strftime("%Y-%m-%d %H:%M:%S")
+    return "永久"
+
+
+def next_month_reset_at() -> str:
+    return add_months(datetime.now().replace(microsecond=0), 1).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def parse_tg_username(user: Any) -> str:
@@ -96,6 +117,8 @@ def init_db() -> None:
                 outbound_baseline_bytes INTEGER NOT NULL DEFAULT 0,
                 inbound_used_bytes INTEGER NOT NULL DEFAULT 0,
                 outbound_used_bytes INTEGER NOT NULL DEFAULT 0,
+                traffic_reset_enabled INTEGER NOT NULL DEFAULT 0,
+                next_traffic_reset_at TEXT NOT NULL DEFAULT '',
                 enabled INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -141,6 +164,14 @@ def migrate_db(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE ss_users ADD COLUMN outbound_used_bytes INTEGER NOT NULL DEFAULT 0"
         )
+    if "traffic_reset_enabled" not in columns:
+        conn.execute(
+            "ALTER TABLE ss_users ADD COLUMN traffic_reset_enabled INTEGER NOT NULL DEFAULT 0"
+        )
+    if "next_traffic_reset_at" not in columns:
+        conn.execute(
+            "ALTER TABLE ss_users ADD COLUMN next_traffic_reset_at TEXT NOT NULL DEFAULT ''"
+        )
     info = {
         row[1]: {"type": row[2], "notnull": row[3], "default": row[4], "pk": row[5]}
         for row in conn.execute("PRAGMA table_info(ss_users)").fetchall()
@@ -164,6 +195,8 @@ def migrate_db(conn: sqlite3.Connection) -> None:
                 outbound_baseline_bytes INTEGER NOT NULL DEFAULT 0,
                 inbound_used_bytes INTEGER NOT NULL DEFAULT 0,
                 outbound_used_bytes INTEGER NOT NULL DEFAULT 0,
+                traffic_reset_enabled INTEGER NOT NULL DEFAULT 0,
+                next_traffic_reset_at TEXT NOT NULL DEFAULT '',
                 enabled INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -177,6 +210,7 @@ def migrate_db(conn: sqlite3.Connection) -> None:
                 expire_at, expire_disable_enabled, traffic_limit_gb,
                 inbound_baseline_bytes, outbound_baseline_bytes,
                 inbound_used_bytes, outbound_used_bytes,
+                traffic_reset_enabled, next_traffic_reset_at,
                 enabled, created_at, updated_at
             )
             SELECT
@@ -184,6 +218,7 @@ def migrate_db(conn: sqlite3.Connection) -> None:
                 expire_at, expire_disable_enabled, traffic_limit_gb,
                 inbound_baseline_bytes, outbound_baseline_bytes,
                 0, 0,
+                0, '',
                 enabled, created_at, updated_at
             FROM ss_users_old
             """
@@ -396,6 +431,8 @@ def create_user(
     expire_at: Optional[str] = None,
     expire_disable_enabled: int = 1,
     traffic_limit_gb: int = DEFAULT_TRAFFIC_GB,
+    traffic_reset_enabled: int = 0,
+    next_traffic_reset_at: str = "",
 ) -> dict[str, Any]:
     init_db()
     port = port or random_port()
@@ -407,9 +444,11 @@ def create_user(
             """
             INSERT INTO ss_users (
                 tg_user_id, tg_username, display_name, port, method, password,
-                expire_at, expire_disable_enabled, traffic_limit_gb, enabled, created_at, updated_at
+                expire_at, expire_disable_enabled, traffic_limit_gb,
+                traffic_reset_enabled, next_traffic_reset_at,
+                enabled, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
             """,
             (
                 tg_user_id,
@@ -421,6 +460,8 @@ def create_user(
                 expire_at,
                 int(expire_disable_enabled),
                 int(traffic_limit_gb),
+                int(traffic_reset_enabled),
+                next_traffic_reset_at,
                 now_text(),
                 now_text(),
             ),
@@ -470,14 +511,9 @@ def delete_user(user_id: int) -> Optional[dict[str, Any]]:
 
 
 def add_one_month(date_text: str) -> str:
-    source = datetime.strptime(date_text, "%Y-%m-%d")
-    month = source.month + 1
-    year = source.year
-    if month > 12:
-        month = 1
-        year += 1
-    day = min(source.day, calendar.monthrange(year, month)[1])
-    return datetime(year, month, day).strftime("%Y-%m-%d")
+    fmt = "%Y-%m-%d %H:%M:%S" if " " in date_text else "%Y-%m-%d"
+    source = datetime.strptime(date_text, fmt)
+    return add_months(source, 1).strftime(fmt)
 
 
 def roll_date_forward(date_text: str, today: str) -> str:
@@ -488,27 +524,29 @@ def roll_date_forward(date_text: str, today: str) -> str:
 
 
 def disable_expired_users() -> int:
-    today = datetime.now().strftime("%Y-%m-%d")
+    now = now_text()
     with db() as conn:
         rows = conn.execute(
             """
             SELECT id FROM ss_users
-            WHERE enabled = 1 AND expire_disable_enabled = 1 AND expire_at < ?
+            WHERE enabled = 1 AND expire_disable_enabled = 1
+              AND expire_at != '永久' AND expire_at < ?
             """,
-            (today,),
+            (now,),
         ).fetchall()
         if rows:
             conn.execute(
                 """
                 UPDATE ss_users
                 SET enabled = 0, updated_at = ?
-                WHERE enabled = 1 AND expire_disable_enabled = 1 AND expire_at < ?
+                WHERE enabled = 1 AND expire_disable_enabled = 1
+                  AND expire_at != '永久' AND expire_at < ?
                 """,
-                (now_text(), today),
+                (now, now),
             )
             conn.commit()
 
-    renew_monthly_users(today)
+    renew_monthly_users(now)
     if rows:
         render_singbox_config()
         restart_singbox()
@@ -521,7 +559,8 @@ def renew_monthly_users(today: str) -> int:
         rows = conn.execute(
             """
             SELECT * FROM ss_users
-            WHERE enabled = 1 AND expire_disable_enabled = 0 AND expire_at < ?
+            WHERE enabled = 1 AND expire_disable_enabled = 0
+              AND expire_at != '永久' AND expire_at < ?
             """,
             (today,),
         ).fetchall()
@@ -546,6 +585,49 @@ def renew_monthly_users(today: str) -> int:
             renewed += 1
         conn.commit()
     return renewed
+
+
+def reset_due_traffic() -> int:
+    now = now_text()
+    reset_count = 0
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM ss_users
+            WHERE traffic_reset_enabled = 1
+              AND next_traffic_reset_at != ''
+              AND next_traffic_reset_at <= ?
+            """,
+            (now,),
+        ).fetchall()
+        for row in rows:
+            user = dict(row)
+            raw = get_user_traffic_raw(user)
+            next_at = user["next_traffic_reset_at"]
+            while next_at <= now:
+                next_at = add_months(
+                    datetime.strptime(next_at, "%Y-%m-%d %H:%M:%S"),
+                    1,
+                ).strftime("%Y-%m-%d %H:%M:%S")
+            conn.execute(
+                """
+                UPDATE ss_users
+                SET inbound_baseline_bytes = ?, outbound_baseline_bytes = ?,
+                    inbound_used_bytes = 0, outbound_used_bytes = 0,
+                    next_traffic_reset_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    raw["inbound_bytes"],
+                    raw["outbound_bytes"],
+                    next_at,
+                    now,
+                    user["id"],
+                ),
+            )
+            reset_count += 1
+        conn.commit()
+    return reset_count
 
 
 def reset_all() -> None:
@@ -915,7 +997,9 @@ def format_user(user: dict[str, Any], include_url: bool = False) -> str:
         f"加密：{user['method']}\n"
         f"到期：{user['expire_at']}\n"
         f"到期禁用：{'开启' if int(user.get('expire_disable_enabled', 1)) else '关闭'}\n"
-        f"月流量：{user['traffic_limit_gb']}GB 出站计费\n"
+        f"流量额度：{user['traffic_limit_gb']}GB 单向出站计费\n"
+        f"流量重置：{'开启' if int(user.get('traffic_reset_enabled') or 0) else '关闭'}"
+        f"{'｜下次 ' + str(user.get('next_traffic_reset_at')) if int(user.get('traffic_reset_enabled') or 0) else ''}\n"
         f"状态：{'启用' if user['enabled'] else '禁用'}\n"
         f"流量：{traffic_text(user)}"
     )
@@ -936,6 +1020,8 @@ class ApprovalDraft:
     expire_at: str
     expire_disable_enabled: int
     traffic_limit_gb: int
+    traffic_reset_enabled: int
+    next_traffic_reset_at: str
 
     @property
     def key(self) -> str:
@@ -953,7 +1039,9 @@ class ApprovalDraft:
             f"密码：{self.password}\n"
             f"到期日：{self.expire_at}\n"
             f"到期禁用：{'开启' if self.expire_disable_enabled else '关闭'}\n"
-            f"月流量：{self.traffic_limit_gb}GB 出站计费\n"
+            f"流量额度：{self.traffic_limit_gb}GB 单向出站计费\n"
+            f"流量重置：{'开启' if self.traffic_reset_enabled else '关闭'}"
+            f"{'｜下次 ' + self.next_traffic_reset_at if self.traffic_reset_enabled else ''}\n"
             "点击确认后将创建用户并重载 sing-box。"
         )
 
@@ -971,6 +1059,8 @@ def make_draft(tg_user_id: int, tg_username: str) -> ApprovalDraft:
         expire_at=default_expire_date(),
         expire_disable_enabled=1,
         traffic_limit_gb=DEFAULT_TRAFFIC_GB,
+        traffic_reset_enabled=0,
+        next_traffic_reset_at="",
     )
 
 
@@ -990,6 +1080,8 @@ def make_manual_draft(tg_user_id: Optional[int], tg_username: str = "未知") ->
         expire_at=default_expire_date(),
         expire_disable_enabled=1,
         traffic_limit_gb=DEFAULT_TRAFFIC_GB,
+        traffic_reset_enabled=0,
+        next_traffic_reset_at="",
     )
 
 

@@ -36,10 +36,18 @@ def add_user():
         print(f"{idx}. {method}")
     method_raw = input("留空默认 1：").strip()
     method = methods[int(method_raw) - 1] if method_raw else methods[0]
-    expire_at = input(f"请输入到期日，留空默认 {ss_manager.default_expire_date()}：").strip() or ss_manager.default_expire_date()
-    traffic_raw = input("请输入月流量 GB，留空默认 100：").strip() or "100"
-    expire_disable_raw = input("到期后自动禁用？留空默认是，输入 n 关闭：").strip().lower()
-    expire_disable_enabled = 0 if expire_disable_raw in ("n", "no", "0", "否") else 1
+    duration_type = input("请选择有效期：1. 永久  2. 按月  3. 按日，留空默认 2：").strip() or "2"
+    if duration_type == "1":
+        expire_at = "永久"
+        expire_disable_enabled = 0
+    else:
+        amount = int(input("请输入数量：").strip())
+        expire_at = ss_manager.duration_expire_at("day" if duration_type == "3" else "month", amount)
+        expire_disable_enabled = 1
+    traffic_raw = input("请输入流量额度 GB，按单向出站计费，留空默认 100：").strip() or "100"
+    reset_raw = input("是否每整一个月重置该用户流量？输入 y 开启，留空关闭：").strip().lower()
+    traffic_reset_enabled = 1 if reset_raw in ("y", "yes", "1", "是") else 0
+    next_traffic_reset_at = ss_manager.next_month_reset_at() if traffic_reset_enabled else ""
     user = ss_manager.create_user(
         tg_user_id=tg_user_id,
         tg_username=tg_username,
@@ -50,6 +58,8 @@ def add_user():
         expire_at=expire_at,
         expire_disable_enabled=expire_disable_enabled,
         traffic_limit_gb=int(traffic_raw),
+        traffic_reset_enabled=traffic_reset_enabled,
+        next_traffic_reset_at=next_traffic_reset_at,
     )
     print("已创建用户：")
     print(ss_manager.format_user(user, include_url=True))

@@ -461,6 +461,37 @@ def ask_draft_method(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraf
     bot.send_message(chat_id, "\n".join(lines))
 
 
+def ask_draft_duration_type(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraft):
+    admin_states[admin_id] = {"mode": "draft_wizard_duration_type", "draft": draft}
+    markup = InlineKeyboardMarkup(row_width=3)
+    markup.add(
+        InlineKeyboardButton("永久", callback_data=f"draft_duration_forever_{draft.key}"),
+        InlineKeyboardButton("按月", callback_data=f"draft_duration_month_{draft.key}"),
+        InlineKeyboardButton("按日", callback_data=f"draft_duration_day_{draft.key}"),
+    )
+    bot.send_message(chat_id, "请选择有效期：", reply_markup=markup)
+
+
+def ask_draft_duration_amount(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraft, unit: str):
+    admin_states[admin_id] = {"mode": "draft_wizard_duration_amount", "draft": draft, "unit": unit}
+    bot.send_message(chat_id, f"请输入数量，代表 {unit == 'month' and '几个月' or '几天'}：")
+
+
+def ask_draft_traffic(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraft):
+    admin_states[admin_id] = {"mode": "draft_wizard_traffic", "draft": draft}
+    bot.send_message(chat_id, "请输入流量额度，单位 GB，按单向出站计费。例如发送 100 表示 100GB。")
+
+
+def ask_draft_reset(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraft):
+    admin_states[admin_id] = {"mode": "draft_wizard_reset", "draft": draft}
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("开启每月重置", callback_data=f"draft_reset_on_{draft.key}"),
+        InlineKeyboardButton("不重置", callback_data=f"draft_reset_off_{draft.key}"),
+    )
+    bot.send_message(chat_id, "是否每整一个月重置该用户流量？", reply_markup=markup)
+
+
 def send_user_management(chat_id: int):
     users = ss_manager.list_users()
     if not users:
@@ -661,6 +692,48 @@ def handle_draft_protocol(call):
     ask_draft_port(call.message.chat.id, call.from_user.id, draft)
 
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith("draft_duration_"))
+@check_admin
+def handle_draft_duration(call):
+    parts = call.data.split("_")
+    choice = parts[2]
+    draft_key = parts[-1]
+    state = admin_states.get(call.from_user.id) or {}
+    draft = state.get("draft")
+    if not draft or draft.key != draft_key:
+        bot.answer_callback_query(call.id, "草稿已过期，请重新创建。", show_alert=True)
+        return
+    if choice == "forever":
+        draft.expire_at = "永久"
+        draft.expire_disable_enabled = 0
+        bot.answer_callback_query(call.id)
+        safe_edit(call, "已选择永久。")
+        ask_draft_traffic(call.message.chat.id, call.from_user.id, draft)
+        return
+    unit = "month" if choice == "month" else "day"
+    bot.answer_callback_query(call.id)
+    safe_edit(call, f"已选择按{'月' if unit == 'month' else '日'}。")
+    ask_draft_duration_amount(call.message.chat.id, call.from_user.id, draft, unit)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("draft_reset_"))
+@check_admin
+def handle_draft_reset(call):
+    choice = call.data.split("_")[2]
+    draft_key = call.data.rsplit("_", 1)[1]
+    state = admin_states.get(call.from_user.id) or {}
+    draft = state.get("draft")
+    if not draft or draft.key != draft_key:
+        bot.answer_callback_query(call.id, "草稿已过期，请重新创建。", show_alert=True)
+        return
+    draft.traffic_reset_enabled = 1 if choice == "on" else 0
+    draft.next_traffic_reset_at = ss_manager.next_month_reset_at() if draft.traffic_reset_enabled else ""
+    admin_states[call.from_user.id] = {"mode": "draft", "draft": draft}
+    bot.answer_callback_query(call.id)
+    safe_edit(call, "已设置流量重置。")
+    send_draft(call.message.chat.id, draft)
+
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith("notify_"))
 @check_admin
 def handle_notify_actions(call):
@@ -762,6 +835,8 @@ def handle_draft_actions(call):
             expire_at=draft.expire_at,
             expire_disable_enabled=draft.expire_disable_enabled,
             traffic_limit_gb=draft.traffic_limit_gb,
+            traffic_reset_enabled=draft.traffic_reset_enabled,
+            next_traffic_reset_at=draft.next_traffic_reset_at,
         )
         admin_states.pop(call.from_user.id, None)
         bot.answer_callback_query(call.id, "已创建。")
@@ -874,9 +949,14 @@ def handle_user_actions(call):
 
 def parse_expire_value(value: str) -> str:
     value = value.strip()
+    if value in ("永久", "forever", "permanent"):
+        return "永久"
     if value.endswith("d") and value[:-1].isdigit():
-        return (datetime.now() + timedelta(days=int(value[:-1]))).strftime("%Y-%m-%d")
-    datetime.strptime(value, "%Y-%m-%d")
+        return (datetime.now() + timedelta(days=int(value[:-1]))).strftime("%Y-%m-%d %H:%M:%S")
+    if value.endswith("m") and value[:-1].isdigit():
+        return ss_manager.duration_expire_at("month", int(value[:-1]))
+    fmt = "%Y-%m-%d %H:%M:%S" if " " in value else "%Y-%m-%d"
+    datetime.strptime(value, fmt)
     return value
 
 
@@ -954,8 +1034,29 @@ def handle_admin_state_input(message):
             draft.method = methods[index]
             if not draft.password:
                 draft.password = ss_manager.generate_password_for_method(draft.method)
-            admin_states[message.from_user.id] = {"mode": "draft", "draft": draft}
-            send_draft(message.chat.id, draft)
+            ask_draft_duration_type(message.chat.id, message.from_user.id, draft)
+            return
+
+        if mode == "draft_wizard_duration_amount":
+            draft = state["draft"]
+            unit = state["unit"]
+            amount = int(value)
+            if amount <= 0:
+                bot.send_message(message.chat.id, "数量必须大于 0，请重新输入。")
+                return
+            draft.expire_at = ss_manager.duration_expire_at(unit, amount)
+            draft.expire_disable_enabled = 1
+            ask_draft_traffic(message.chat.id, message.from_user.id, draft)
+            return
+
+        if mode == "draft_wizard_traffic":
+            draft = state["draft"]
+            traffic = int(value)
+            if traffic <= 0:
+                bot.send_message(message.chat.id, "流量必须大于 0，请重新输入。")
+                return
+            draft.traffic_limit_gb = traffic
+            ask_draft_reset(message.chat.id, message.from_user.id, draft)
             return
 
         if mode == "draft_method_input":
@@ -1370,6 +1471,7 @@ def send_quality_images(chat_id: int, png_path: Path):
 def run_scheduler():
     while True:
         ss_manager.disable_expired_users()
+        ss_manager.reset_due_traffic()
         ss_manager.enforce_traffic_limits()
         send_scheduled_traffic_report()
         schedule.run_pending()
