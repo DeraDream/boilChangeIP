@@ -20,6 +20,7 @@ from telebot.types import (
     InlineKeyboardMarkup,
     KeyboardButton,
     ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
 )
 
 from api_client import IPPanelClient
@@ -209,7 +210,7 @@ def send_welcome(message):
         bot.send_message(message.chat.id, "也可以在这里选择操作：", reply_markup=main_menu())
         return
     if is_ss_user(user_id):
-        bot.send_message(message.chat.id, "你的 SS 用户菜单已启用。", reply_markup=user_menu())
+        bot.send_message(message.chat.id, "你的 SS 用户已启用，可发送 /my_ss 查看链接。", reply_markup=ReplyKeyboardRemove())
         return
     bot.send_message(message.chat.id, f"你的 ID 是：{user_id}", reply_markup=guest_menu())
 
@@ -356,9 +357,12 @@ def send_my_ss(chat_id: int, tg_user_id: int):
     if not user:
         bot.send_message(chat_id, f"你还没有权限。你的 ID 是：{tg_user_id}", reply_markup=guest_menu())
         return
-    markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(InlineKeyboardButton("更换 IP", callback_data="user_change_ip"))
-    bot.send_message(chat_id, ss_manager.format_user(user, include_url=True), parse_mode="HTML", reply_markup=markup)
+    bot.send_message(
+        chat_id,
+        ss_manager.format_user(user, include_url=True),
+        parse_mode="HTML",
+        reply_markup=ReplyKeyboardRemove(),
+    )
 
 
 def handle_ss_request(message):
@@ -367,7 +371,7 @@ def handle_ss_request(message):
         bot.send_message(message.chat.id, "你是管理员，无需申请。", reply_markup=reply_menu())
         return
     if is_ss_user(user_id):
-        bot.send_message(message.chat.id, "你已经有权限，请点击“我的链接”。", reply_markup=user_menu())
+        bot.send_message(message.chat.id, "你已经有权限，可发送 /my_ss 查看链接。", reply_markup=ReplyKeyboardRemove())
         return
 
     username = ss_manager.parse_tg_username(message.from_user)
@@ -764,7 +768,11 @@ def handle_draft_actions(call):
         safe_edit(call, "已创建用户：\n\n" + ss_manager.format_user(user))
         if draft.tg_user_id is not None:
             try:
-                bot.send_message(draft.tg_user_id, "你的 SS 链接已开通，请点击底部“我的链接”查看。", reply_markup=user_menu())
+                bot.send_message(
+                    draft.tg_user_id,
+                    "你的 SS 链接已开通，可发送 /my_ss 查看。",
+                    reply_markup=ReplyKeyboardRemove(),
+                )
             except Exception:
                 pass
         return

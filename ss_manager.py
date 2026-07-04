@@ -372,9 +372,17 @@ def ss_url_html(user: dict[str, Any]) -> str:
     escaped_url = html.escape(url, quote=True)
     share_url = f"https://t.me/share/url?url={quote_plus(url)}"
     escaped_share_url = html.escape(share_url, quote=True)
+    host = html.escape(get_public_host(), quote=True)
+    method = html.escape(str(user["method"]), quote=True)
+    password = html.escape(str(user["password"]), quote=True)
+    port = html.escape(str(user["port"]), quote=True)
     return (
-        f'<a href="{escaped_share_url}">点击查看 SS 链接</a>\n'
-        f"<code>{escaped_url}</code>"
+        f'<a href="{escaped_share_url}">解析 SS</a>\n'
+        f"服务器：<code>{host}</code>\n"
+        f"端口：<code>{port}</code>\n"
+        f"加密：<code>{method}</code>\n"
+        f"密码：<code>{password}</code>\n"
+        f"原始链接：<code>{escaped_url}</code>"
     )
 
 
@@ -899,7 +907,7 @@ def traffic_report() -> str:
 
 def format_user(user: dict[str, Any], include_url: bool = False) -> str:
     text = (
-        f"用户 ID：{user['id']}\n"
+        f"序号：{user['id']}\n"
         f"TG ID：{user['tg_user_id'] or '未绑定'}\n"
         f"用户名：{user['tg_username'] or '未知'}\n"
         f"显示名：{user['display_name']}\n"
