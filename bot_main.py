@@ -414,12 +414,47 @@ def start_manual_create(chat_id: int, admin_id: int):
     bot.send_message(chat_id, "请选择要创建的用户类型：", reply_markup=markup)
 
 
-def send_method_menu(chat_id: int, draft: ss_manager.ApprovalDraft):
-    markup = InlineKeyboardMarkup(row_width=1)
-    for idx, method in enumerate(ss_manager.SS_METHODS):
-        label = f"{'✓ ' if method == draft.method else ''}{method}"
-        markup.add(InlineKeyboardButton(label, callback_data=f"draft_setmethod_{idx}_{draft.key}"))
-    bot.send_message(chat_id, "请选择加密方式：", reply_markup=markup)
+def send_method_menu(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraft):
+    methods = ss_manager.methods_for_protocol(draft.protocol)
+    lines = ["请选择加密方式，发送序号：", ""]
+    for idx, method in enumerate(methods, start=1):
+        current = "（当前）" if method == draft.method else ""
+        lines.append(f"{idx}. {method}{current}")
+    admin_states[admin_id] = {"mode": "draft_method_input", "draft": draft}
+    bot.send_message(chat_id, "\n".join(lines))
+
+
+def begin_draft_wizard(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraft):
+    admin_states[admin_id] = {"mode": "draft_protocol", "draft": draft}
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("普通 SS", callback_data=f"draft_proto_ss_{draft.key}"),
+        InlineKeyboardButton("SS2022", callback_data=f"draft_proto_ss2022_{draft.key}"),
+    )
+    bot.send_message(chat_id, "请选择要创建的类型：", reply_markup=markup)
+
+
+def ask_draft_port(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraft):
+    admin_states[admin_id] = {"mode": "draft_wizard_port", "draft": draft}
+    bot.send_message(chat_id, "请输入端口；发送 random 或留空表示随机。")
+
+
+def ask_draft_password(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraft):
+    admin_states[admin_id] = {"mode": "draft_wizard_password", "draft": draft}
+    bot.send_message(chat_id, "请输入密码；发送 random 或留空表示随机。")
+
+
+def ask_draft_method(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraft):
+    methods = ss_manager.methods_for_protocol(draft.protocol)
+    lines = [f"请选择 {'SS2022' if draft.protocol == 'ss2022' else '普通 SS'} 加密方式，发送序号：", ""]
+    for idx, method in enumerate(methods, start=1):
+        lines.append(f"{idx}. {method}")
+    admin_states[admin_id] = {
+        "mode": "draft_wizard_method",
+        "draft": draft,
+        "methods": methods,
+    }
+    bot.send_message(chat_id, "\n".join(lines))
 
 
 def send_user_management(chat_id: int):
@@ -587,22 +622,39 @@ def handle_manual_create_choice(call):
             return
         username = ss_manager.parse_tg_username(call.from_user)
         draft = ss_manager.make_manual_draft(call.from_user.id, username)
-        admin_states[call.from_user.id] = {"mode": "draft", "draft": draft}
         bot.answer_callback_query(call.id)
         safe_edit(call, "已选择给本人创建。")
-        send_draft(call.message.chat.id, draft)
+        begin_draft_wizard(call.message.chat.id, call.from_user.id, draft)
         return
     if call.data == "manual_unbound":
         draft = ss_manager.make_manual_draft(None)
-        admin_states[call.from_user.id] = {"mode": "draft", "draft": draft}
         bot.answer_callback_query(call.id)
         safe_edit(call, "已选择创建不绑定 TG 的用户。")
-        send_draft(call.message.chat.id, draft)
+        begin_draft_wizard(call.message.chat.id, call.from_user.id, draft)
         return
     if call.data == "manual_custom":
         admin_states[call.from_user.id] = {"mode": "manual_tg_id"}
         bot.answer_callback_query(call.id)
         safe_edit(call, "请输入要绑定的 TG ID；如果不需要绑定，直接发送 0 或 留空。")
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("draft_proto_"))
+@check_admin
+def handle_draft_protocol(call):
+    protocol = "ss2022" if call.data.startswith("draft_proto_ss2022_") else "ss"
+    state = admin_states.get(call.from_user.id) or {}
+    draft = state.get("draft")
+    draft_key = call.data.rsplit("_", 1)[1]
+    if not draft or draft.key != draft_key:
+        bot.answer_callback_query(call.id, "草稿已过期，请重新创建。", show_alert=True)
+        return
+    draft.protocol = protocol
+    methods = ss_manager.methods_for_protocol(protocol)
+    draft.method = methods[0]
+    draft.password = ss_manager.generate_password_for_method(draft.method)
+    bot.answer_callback_query(call.id)
+    safe_edit(call, f"已选择 {'SS2022' if protocol == 'ss2022' else '普通 SS'}。")
+    ask_draft_port(call.message.chat.id, call.from_user.id, draft)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("notify_"))
@@ -666,9 +718,8 @@ def handle_request_accept(call):
         bot.answer_callback_query(call.id, "申请不存在。", show_alert=True)
         return
     draft = ss_manager.make_draft(tg_user_id, req.get("tg_username") or "未知")
-    admin_states[call.from_user.id] = {"mode": "draft", "draft": draft}
     bot.answer_callback_query(call.id)
-    send_draft(call.message.chat.id, draft)
+    begin_draft_wizard(call.message.chat.id, call.from_user.id, draft)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("ssreq_reject_"))
@@ -733,12 +784,12 @@ def handle_draft_actions(call):
 
     if action == "method":
         bot.answer_callback_query(call.id)
-        send_method_menu(call.message.chat.id, draft)
+        send_method_menu(call.message.chat.id, call.from_user.id, draft)
         return
 
     if action == "setmethod":
         try:
-            method = ss_manager.SS_METHODS[int(parts[2])]
+            method = ss_manager.methods_for_protocol(draft.protocol)[int(parts[2])]
         except (ValueError, IndexError):
             bot.answer_callback_query(call.id, "加密方式不存在。", show_alert=True)
             return
@@ -863,6 +914,50 @@ def handle_admin_state_input(message):
         if mode == "manual_tg_id":
             tg_user_id = None if value in ("", "0", "不绑定", "无") else int(value)
             draft = ss_manager.make_manual_draft(tg_user_id)
+            begin_draft_wizard(message.chat.id, message.from_user.id, draft)
+            return
+
+        if mode == "draft_wizard_port":
+            draft = state["draft"]
+            if value.lower() in ("", "random", "随机"):
+                draft.port = ss_manager.random_port()
+            else:
+                port = int(value)
+                if port in ss_manager.used_ports() or not ss_manager.is_port_free(port):
+                    bot.send_message(message.chat.id, "端口不可用，请重新输入；也可以发送 random 随机。")
+                    return
+                draft.port = port
+            ask_draft_password(message.chat.id, message.from_user.id, draft)
+            return
+
+        if mode == "draft_wizard_password":
+            draft = state["draft"]
+            draft.password = "" if value.lower() in ("", "random", "随机") else value
+            ask_draft_method(message.chat.id, message.from_user.id, draft)
+            return
+
+        if mode == "draft_wizard_method":
+            draft = state["draft"]
+            methods = state.get("methods") or ss_manager.methods_for_protocol(draft.protocol)
+            index = int(value) - 1
+            if index < 0 or index >= len(methods):
+                bot.send_message(message.chat.id, "序号无效，请重新输入列表中的序号。")
+                return
+            draft.method = methods[index]
+            if not draft.password:
+                draft.password = ss_manager.generate_password_for_method(draft.method)
+            admin_states[message.from_user.id] = {"mode": "draft", "draft": draft}
+            send_draft(message.chat.id, draft)
+            return
+
+        if mode == "draft_method_input":
+            draft = state["draft"]
+            methods = ss_manager.methods_for_protocol(draft.protocol)
+            index = int(value) - 1
+            if index < 0 or index >= len(methods):
+                bot.send_message(message.chat.id, "序号无效，请重新输入列表中的序号。")
+                return
+            draft.method = methods[index]
             admin_states[message.from_user.id] = {"mode": "draft", "draft": draft}
             send_draft(message.chat.id, draft)
             return

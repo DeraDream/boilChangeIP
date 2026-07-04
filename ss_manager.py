@@ -26,13 +26,16 @@ DB_PATH = DATA_DIR / "boil_ss.db"
 SINGBOX_CONFIG = Path("/etc/sing-box/boil-change-ip.json")
 SINGBOX_SERVICE = Path("/etc/systemd/system/sing-box-boil.service")
 SS_METHOD = "2022-blake3-aes-128-gcm"
-SS_METHODS = [
+SS2022_METHODS = [
     "2022-blake3-aes-128-gcm",
     "2022-blake3-aes-256-gcm",
+]
+LEGACY_SS_METHODS = [
     "aes-128-gcm",
     "aes-256-gcm",
     "chacha20-ietf-poly1305",
 ]
+SS_METHODS = [*SS2022_METHODS, *LEGACY_SS_METHODS]
 DEFAULT_TRAFFIC_GB = 100
 PORT_MIN = 30000
 PORT_MAX = 60000
@@ -290,6 +293,14 @@ def normalize_method(method: str) -> str:
     if method not in SS_METHODS:
         raise ValueError(f"不支持的加密方式：{method}")
     return method
+
+
+def methods_for_protocol(protocol: str) -> list[str]:
+    return SS2022_METHODS if protocol == "ss2022" else LEGACY_SS_METHODS
+
+
+def protocol_for_method(method: str) -> str:
+    return "ss2022" if method in SS2022_METHODS else "ss"
 
 
 def get_public_host() -> str:
@@ -868,6 +879,7 @@ class ApprovalDraft:
     tg_username: str
     display_name: str
     port: int
+    protocol: str
     method: str
     password: str
     expire_at: str
@@ -884,6 +896,7 @@ class ApprovalDraft:
             f"TG ID：{self.tg_user_id if self.tg_user_id is not None else '未绑定'}\n"
             f"用户名：{self.tg_username}\n"
             f"显示名：{self.display_name}\n"
+            f"类型：{'SS2022' if self.protocol == 'ss2022' else '普通 SS'}\n"
             f"端口：{self.port}\n"
             f"加密：{self.method}\n"
             f"密码：{self.password}\n"
@@ -901,6 +914,7 @@ def make_draft(tg_user_id: int, tg_username: str) -> ApprovalDraft:
         tg_username=tg_username or "未知",
         display_name=(tg_username or f"user_{tg_user_id}").replace("@", ""),
         port=random_port(),
+        protocol=protocol_for_method(method),
         method=method,
         password=generate_password_for_method(method),
         expire_at=default_expire_date(),
@@ -919,6 +933,7 @@ def make_manual_draft(tg_user_id: Optional[int], tg_username: str = "未知") ->
         tg_username=tg_username or "未知",
         display_name=display_seed,
         port=random_port(),
+        protocol=protocol_for_method(method),
         method=method,
         password=generate_password_for_method(method),
         expire_at=default_expire_date(),

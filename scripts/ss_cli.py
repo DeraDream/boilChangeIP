@@ -25,13 +25,16 @@ def add_user():
     tg_user_id = None if tg_raw in ("", "0", "不绑定", "无") else int(tg_raw)
     tg_username = input("请输入 TG 用户名，未知可留空：").strip() or "未知"
     display_name = input("请输入显示名，留空自动生成：").strip() or tg_username.replace("@", "") or (f"user_{tg_user_id}" if tg_user_id is not None else "manual_user")
+    protocol_raw = input("请选择类型：1. 普通 SS  2. SS2022，留空默认 2：").strip()
+    protocol = "ss" if protocol_raw == "1" else "ss2022"
     port_raw = input("请输入端口，留空随机：").strip()
+    password = input("请输入密码，留空随机：").strip() or None
+    methods = ss_manager.methods_for_protocol(protocol)
     print("请选择加密方式：")
-    for idx, method in enumerate(ss_manager.SS_METHODS, start=1):
+    for idx, method in enumerate(methods, start=1):
         print(f"{idx}. {method}")
     method_raw = input("留空默认 1：").strip()
-    method = ss_manager.SS_METHODS[int(method_raw) - 1] if method_raw else ss_manager.SS_METHODS[0]
-    password = input("请输入密码，留空随机：").strip() or None
+    method = methods[int(method_raw) - 1] if method_raw else methods[0]
     expire_at = input(f"请输入到期日，留空默认 {ss_manager.default_expire_date()}：").strip() or ss_manager.default_expire_date()
     traffic_raw = input("请输入月流量 GB，留空默认 100：").strip() or "100"
     expire_disable_raw = input("到期后自动禁用？留空默认是，输入 n 关闭：").strip().lower()
