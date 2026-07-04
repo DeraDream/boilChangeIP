@@ -389,6 +389,8 @@ def approval_markup(draft: ss_manager.ApprovalDraft) -> InlineKeyboardMarkup:
     markup.add(
         InlineKeyboardButton("确认创建", callback_data=f"draft_confirm_{key}"),
         InlineKeyboardButton("修改端口", callback_data=f"draft_edit_port_{key}"),
+        InlineKeyboardButton("选择加密", callback_data=f"draft_method_{key}"),
+        InlineKeyboardButton("修改密码", callback_data=f"draft_edit_password_{key}"),
         InlineKeyboardButton("修改用户名", callback_data=f"draft_edit_name_{key}"),
         InlineKeyboardButton("修改到期日", callback_data=f"draft_edit_expire_{key}"),
         InlineKeyboardButton("切换到期禁用", callback_data=f"draft_toggle_expire_disable_{key}"),
@@ -403,8 +405,21 @@ def send_draft(chat_id: int, draft: ss_manager.ApprovalDraft):
 
 
 def start_manual_create(chat_id: int, admin_id: int):
-    admin_states[admin_id] = {"mode": "manual_tg_id"}
-    bot.send_message(chat_id, "请输入要绑定的 TG ID；如果不需要绑定，直接发送 0 或 留空。")
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        InlineKeyboardButton("给我本人创建", callback_data="manual_self"),
+        InlineKeyboardButton("创建不绑定 TG 的用户", callback_data="manual_unbound"),
+        InlineKeyboardButton("输入指定 TG ID", callback_data="manual_custom"),
+    )
+    bot.send_message(chat_id, "请选择要创建的用户类型：", reply_markup=markup)
+
+
+def send_method_menu(chat_id: int, draft: ss_manager.ApprovalDraft):
+    markup = InlineKeyboardMarkup(row_width=1)
+    for idx, method in enumerate(ss_manager.SS_METHODS):
+        label = f"{'✓ ' if method == draft.method else ''}{method}"
+        markup.add(InlineKeyboardButton(label, callback_data=f"draft_setmethod_{idx}_{draft.key}"))
+    bot.send_message(chat_id, "请选择加密方式：", reply_markup=markup)
 
 
 def send_user_management(chat_id: int):
@@ -417,6 +432,7 @@ def send_user_management(chat_id: int):
         markup.add(
             InlineKeyboardButton("修改到期日", callback_data=f"user_edit_expire_{user['id']}"),
             InlineKeyboardButton("切换到期禁用", callback_data=f"user_toggle_expire_disable_{user['id']}"),
+            InlineKeyboardButton("切换启用状态", callback_data=f"user_toggle_enabled_{user['id']}"),
             InlineKeyboardButton("修改流量", callback_data=f"user_edit_traffic_{user['id']}"),
             InlineKeyboardButton("删除用户", callback_data=f"user_delete_{user['id']}"),
         )
@@ -561,6 +577,34 @@ def handle_menu_api_token(call):
     start_api_token_config(call.message.chat.id, call.from_user.id)
 
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith("manual_"))
+@check_admin
+def handle_manual_create_choice(call):
+    if call.data == "manual_self":
+        existing = ss_manager.get_user_by_tg(call.from_user.id)
+        if existing:
+            bot.answer_callback_query(call.id, "你已经绑定过 SS 用户。", show_alert=True)
+            return
+        username = ss_manager.parse_tg_username(call.from_user)
+        draft = ss_manager.make_manual_draft(call.from_user.id, username)
+        admin_states[call.from_user.id] = {"mode": "draft", "draft": draft}
+        bot.answer_callback_query(call.id)
+        safe_edit(call, "已选择给本人创建。")
+        send_draft(call.message.chat.id, draft)
+        return
+    if call.data == "manual_unbound":
+        draft = ss_manager.make_manual_draft(None)
+        admin_states[call.from_user.id] = {"mode": "draft", "draft": draft}
+        bot.answer_callback_query(call.id)
+        safe_edit(call, "已选择创建不绑定 TG 的用户。")
+        send_draft(call.message.chat.id, draft)
+        return
+    if call.data == "manual_custom":
+        admin_states[call.from_user.id] = {"mode": "manual_tg_id"}
+        bot.answer_callback_query(call.id)
+        safe_edit(call, "请输入要绑定的 TG ID；如果不需要绑定，直接发送 0 或 留空。")
+
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith("notify_"))
 @check_admin
 def handle_notify_actions(call):
@@ -658,6 +702,8 @@ def handle_draft_actions(call):
             tg_username=draft.tg_username,
             display_name=draft.display_name,
             port=draft.port,
+            method=draft.method,
+            password=draft.password,
             expire_at=draft.expire_at,
             expire_disable_enabled=draft.expire_disable_enabled,
             traffic_limit_gb=draft.traffic_limit_gb,
@@ -685,10 +731,29 @@ def handle_draft_actions(call):
         send_draft(call.message.chat.id, draft)
         return
 
+    if action == "method":
+        bot.answer_callback_query(call.id)
+        send_method_menu(call.message.chat.id, draft)
+        return
+
+    if action == "setmethod":
+        try:
+            method = ss_manager.SS_METHODS[int(parts[2])]
+        except (ValueError, IndexError):
+            bot.answer_callback_query(call.id, "加密方式不存在。", show_alert=True)
+            return
+        draft.method = method
+        draft.password = ss_manager.generate_password_for_method(method)
+        admin_states[call.from_user.id] = {"mode": "draft", "draft": draft}
+        bot.answer_callback_query(call.id, "已切换加密并重新生成随机密码。")
+        send_draft(call.message.chat.id, draft)
+        return
+
     field = parts[2]
     admin_states[call.from_user.id] = {"mode": f"draft_edit_{field}", "draft": draft}
     prompt = {
         "port": "请输入新端口：",
+        "password": "请输入新密码；发送 random 可重新随机生成：",
         "name": "请输入自定义用户名/显示名：",
         "expire": "请输入到期日，例如 2026-06-05 或 30d：",
         "traffic": "请输入月流量 GB，例如 100：",
@@ -719,6 +784,19 @@ def handle_user_actions(call):
             return
         new_value = 0 if int(user.get("expire_disable_enabled", 1)) else 1
         ss_manager.update_user(user_id, expire_disable_enabled=new_value)
+        user = ss_manager.get_user(user_id)
+        bot.answer_callback_query(call.id, "已切换。")
+        safe_edit(call, "已更新用户：\n\n" + ss_manager.format_user(user))
+        return
+
+    if call.data.startswith("user_toggle_enabled_"):
+        user_id = int(call.data.rsplit("_", 1)[1])
+        user = ss_manager.get_user(user_id)
+        if not user:
+            bot.answer_callback_query(call.id, "用户不存在。")
+            return
+        new_value = 0 if int(user.get("enabled", 1)) else 1
+        ss_manager.update_user(user_id, enabled=new_value)
         user = ss_manager.get_user(user_id)
         bot.answer_callback_query(call.id, "已切换。")
         safe_edit(call, "已更新用户：\n\n" + ss_manager.format_user(user))
@@ -793,11 +871,22 @@ def handle_admin_state_input(message):
             draft = state["draft"]
             field = mode.replace("draft_edit_", "")
             if field == "port":
+                if value.lower() in ("random", "随机", ""):
+                    draft.port = ss_manager.random_port()
+                    admin_states[message.from_user.id] = {"mode": "draft", "draft": draft}
+                    send_draft(message.chat.id, draft)
+                    return
                 port = int(value)
                 if port in ss_manager.used_ports() or not ss_manager.is_port_free(port):
                     bot.send_message(message.chat.id, "端口不可用，请重新输入。")
                     return
                 draft.port = port
+            elif field == "password":
+                draft.password = (
+                    ss_manager.generate_password_for_method(draft.method)
+                    if value.lower() in ("random", "随机", "")
+                    else value
+                )
             elif field == "name":
                 draft.display_name = value or draft.display_name
             elif field == "expire":

@@ -26,6 +26,13 @@ DB_PATH = DATA_DIR / "boil_ss.db"
 SINGBOX_CONFIG = Path("/etc/sing-box/boil-change-ip.json")
 SINGBOX_SERVICE = Path("/etc/systemd/system/sing-box-boil.service")
 SS_METHOD = "2022-blake3-aes-128-gcm"
+SS_METHODS = [
+    "2022-blake3-aes-128-gcm",
+    "2022-blake3-aes-256-gcm",
+    "aes-128-gcm",
+    "aes-256-gcm",
+    "chacha20-ietf-poly1305",
+]
 DEFAULT_TRAFFIC_GB = 100
 PORT_MIN = 30000
 PORT_MAX = 60000
@@ -270,6 +277,21 @@ def generate_password() -> str:
     return base64.b64encode(secrets.token_bytes(16)).decode("ascii")
 
 
+def generate_password_for_method(method: str) -> str:
+    if method == "2022-blake3-aes-256-gcm":
+        return base64.b64encode(secrets.token_bytes(32)).decode("ascii")
+    if method == "2022-blake3-aes-128-gcm":
+        return base64.b64encode(secrets.token_bytes(16)).decode("ascii")
+    return secrets.token_urlsafe(18)
+
+
+def normalize_method(method: str) -> str:
+    method = (method or SS_METHOD).strip()
+    if method not in SS_METHODS:
+        raise ValueError(f"不支持的加密方式：{method}")
+    return method
+
+
 def get_public_host() -> str:
     env = load_env()
     configured = env.get("SS_PUBLIC_HOST", "").strip()
@@ -330,12 +352,16 @@ def create_user(
     tg_username: str,
     display_name: str,
     port: Optional[int] = None,
+    method: str = SS_METHOD,
+    password: Optional[str] = None,
     expire_at: Optional[str] = None,
     expire_disable_enabled: int = 1,
     traffic_limit_gb: int = DEFAULT_TRAFFIC_GB,
 ) -> dict[str, Any]:
     init_db()
     port = port or random_port()
+    method = normalize_method(method)
+    password = password or generate_password_for_method(method)
     expire_at = expire_at or default_expire_date()
     with db() as conn:
         cursor = conn.execute(
@@ -351,8 +377,8 @@ def create_user(
                 tg_username,
                 display_name,
                 port,
-                SS_METHOD,
-                generate_password(),
+                method,
+                password,
                 expire_at,
                 int(expire_disable_enabled),
                 int(traffic_limit_gb),
@@ -569,7 +595,14 @@ def ensure_chain(bin_name: str, chain: str, parent: str) -> None:
         subprocess.run([bin_name, "-w", "-I", parent, "1", "-j", chain], check=False)
 
 
-def ensure_rule(bin_name: str, chain: str, port: int, direction: str, comment: str) -> None:
+def ensure_rule(
+    bin_name: str,
+    chain: str,
+    port: int,
+    direction: str,
+    comment: str,
+    target: str = "RETURN",
+) -> None:
     port_flag = "--dport" if direction == "in" else "--sport"
     check = subprocess.run(
         [
@@ -586,7 +619,7 @@ def ensure_rule(bin_name: str, chain: str, port: int, direction: str, comment: s
             "--comment",
             comment,
             "-j",
-            "RETURN",
+            target,
         ],
         check=False,
         stdout=subprocess.DEVNULL,
@@ -608,10 +641,39 @@ def ensure_rule(bin_name: str, chain: str, port: int, direction: str, comment: s
                 "--comment",
                 comment,
                 "-j",
-                "RETURN",
+                target,
             ],
             check=False,
         )
+
+
+def delete_rule_by_comment(bin_name: str, chain: str, comment: str) -> None:
+    save_bin = f"{bin_name}-save"
+    if not shutil.which(save_bin):
+        return
+    result = subprocess.run(
+        [save_bin],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return
+    for line in result.stdout.splitlines():
+        if f"--comment {comment}" not in line and f'--comment "{comment}"' not in line:
+            continue
+        if not line.startswith(f"-A {chain} "):
+            continue
+        spec = line.split()[2:]
+        while True:
+            deleted = subprocess.run(
+                [bin_name, "-w", "-D", chain, *spec],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if deleted.returncode != 0:
+                break
 
 
 def ensure_traffic_rules() -> None:
@@ -619,14 +681,21 @@ def ensure_traffic_rules() -> None:
     for bin_name in iptables_bins():
         ensure_chain(bin_name, "BOIL_SS_IN", "INPUT")
         ensure_chain(bin_name, "BOIL_SS_OUT", "OUTPUT")
+        ensure_chain(bin_name, "BOIL_SS_BLOCK", "INPUT")
         for user in users:
-            ensure_rule(bin_name, "BOIL_SS_IN", int(user["port"]), "in", f"boil_ss_user_{user['id']}_in")
-            ensure_rule(bin_name, "BOIL_SS_OUT", int(user["port"]), "out", f"boil_ss_user_{user['id']}_out")
+            if int(user.get("enabled", 1)):
+                delete_rule_by_comment(bin_name, "BOIL_SS_BLOCK", f"boil_ss_user_{user['id']}_disabled")
+                ensure_rule(bin_name, "BOIL_SS_IN", int(user["port"]), "in", f"boil_ss_user_{user['id']}_in")
+                ensure_rule(bin_name, "BOIL_SS_OUT", int(user["port"]), "out", f"boil_ss_user_{user['id']}_out")
+            else:
+                delete_rule_by_comment(bin_name, "BOIL_SS_IN", f"boil_ss_user_{user['id']}_in")
+                delete_rule_by_comment(bin_name, "BOIL_SS_OUT", f"boil_ss_user_{user['id']}_out")
+                ensure_rule(bin_name, "BOIL_SS_BLOCK", int(user["port"]), "in", f"boil_ss_user_{user['id']}_disabled", "REJECT")
 
 
 def clear_traffic_rules() -> None:
     for bin_name in iptables_bins():
-        for parent, chain in (("INPUT", "BOIL_SS_IN"), ("OUTPUT", "BOIL_SS_OUT")):
+        for parent, chain in (("INPUT", "BOIL_SS_BLOCK"), ("INPUT", "BOIL_SS_IN"), ("OUTPUT", "BOIL_SS_OUT")):
             while True:
                 result = subprocess.run(
                     [bin_name, "-w", "-D", parent, "-j", chain],
@@ -781,6 +850,7 @@ def format_user(user: dict[str, Any], include_url: bool = False) -> str:
         f"用户名：{user['tg_username'] or '未知'}\n"
         f"显示名：{user['display_name']}\n"
         f"端口：{user['port']}\n"
+        f"加密：{user['method']}\n"
         f"到期：{user['expire_at']}\n"
         f"到期禁用：{'开启' if int(user.get('expire_disable_enabled', 1)) else '关闭'}\n"
         f"月流量：{user['traffic_limit_gb']}GB 出站计费\n"
@@ -798,6 +868,8 @@ class ApprovalDraft:
     tg_username: str
     display_name: str
     port: int
+    method: str
+    password: str
     expire_at: str
     expire_disable_enabled: int
     traffic_limit_gb: int
@@ -813,6 +885,8 @@ class ApprovalDraft:
             f"用户名：{self.tg_username}\n"
             f"显示名：{self.display_name}\n"
             f"端口：{self.port}\n"
+            f"加密：{self.method}\n"
+            f"密码：{self.password}\n"
             f"到期日：{self.expire_at}\n"
             f"到期禁用：{'开启' if self.expire_disable_enabled else '关闭'}\n"
             f"月流量：{self.traffic_limit_gb}GB 出站计费\n"
@@ -821,11 +895,14 @@ class ApprovalDraft:
 
 
 def make_draft(tg_user_id: int, tg_username: str) -> ApprovalDraft:
+    method = SS_METHOD
     return ApprovalDraft(
         tg_user_id=tg_user_id,
         tg_username=tg_username or "未知",
         display_name=(tg_username or f"user_{tg_user_id}").replace("@", ""),
         port=random_port(),
+        method=method,
+        password=generate_password_for_method(method),
         expire_at=default_expire_date(),
         expire_disable_enabled=1,
         traffic_limit_gb=DEFAULT_TRAFFIC_GB,
@@ -836,11 +913,14 @@ def make_manual_draft(tg_user_id: Optional[int], tg_username: str = "未知") ->
     display_seed = tg_username.replace("@", "") if tg_username and tg_username != "未知" else ""
     if not display_seed:
         display_seed = f"tg_{tg_user_id}" if tg_user_id is not None else "manual_user"
+    method = SS_METHOD
     return ApprovalDraft(
         tg_user_id=tg_user_id,
         tg_username=tg_username or "未知",
         display_name=display_seed,
         port=random_port(),
+        method=method,
+        password=generate_password_for_method(method),
         expire_at=default_expire_date(),
         expire_disable_enabled=1,
         traffic_limit_gb=DEFAULT_TRAFFIC_GB,
