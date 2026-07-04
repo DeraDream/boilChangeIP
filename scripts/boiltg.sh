@@ -183,14 +183,18 @@ service_status() {
 }
 
 update_script() {
-  local current remote env_backup
+  local current remote local_head remote_head env_backup
   current="$(local_version)"
   remote="$(remote_version)"
+  local_head="$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
+  remote_head="$(git -C "$APP_DIR" rev-parse origin/main 2>/dev/null || echo unknown)"
   log_msg "开始检查更新。"
   log_msg "本地版本：$current"
   log_msg "远程版本：$remote"
+  log_msg "本地提交：$local_head"
+  log_msg "远程提交：$remote_head"
 
-  if version_gt "$remote" "$current"; then
+  if version_gt "$remote" "$current" || [ "$local_head" != "$remote_head" ]; then
     env_backup="$(mktemp)"
 
     if [ -f "$ENV_FILE" ]; then
