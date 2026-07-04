@@ -436,12 +436,12 @@ def begin_draft_wizard(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDr
 
 def ask_draft_port(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraft):
     admin_states[admin_id] = {"mode": "draft_wizard_port", "draft": draft}
-    bot.send_message(chat_id, "请输入端口；发送 random 或留空表示随机。")
+    bot.send_message(chat_id, "请输入端口；发送 0 或 random 表示随机。")
 
 
 def ask_draft_password(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraft):
     admin_states[admin_id] = {"mode": "draft_wizard_password", "draft": draft}
-    bot.send_message(chat_id, "请输入密码；发送 random 或留空表示随机。")
+    bot.send_message(chat_id, "请输入密码；发送 0 或 random 表示随机。")
 
 
 def ask_draft_method(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraft):
@@ -804,7 +804,7 @@ def handle_draft_actions(call):
     admin_states[call.from_user.id] = {"mode": f"draft_edit_{field}", "draft": draft}
     prompt = {
         "port": "请输入新端口：",
-        "password": "请输入新密码；发送 random 可重新随机生成：",
+        "password": "请输入新密码；发送 0 或 random 可重新随机生成：",
         "name": "请输入自定义用户名/显示名：",
         "expire": "请输入到期日，例如 2026-06-05 或 30d：",
         "traffic": "请输入月流量 GB，例如 100：",
@@ -919,12 +919,12 @@ def handle_admin_state_input(message):
 
         if mode == "draft_wizard_port":
             draft = state["draft"]
-            if value.lower() in ("", "random", "随机"):
+            if value.lower() in ("0", "random", "随机"):
                 draft.port = ss_manager.random_port()
             else:
                 port = int(value)
                 if port in ss_manager.used_ports() or not ss_manager.is_port_free(port):
-                    bot.send_message(message.chat.id, "端口不可用，请重新输入；也可以发送 random 随机。")
+                    bot.send_message(message.chat.id, "端口不可用，请重新输入；也可以发送 0 或 random 随机。")
                     return
                 draft.port = port
             ask_draft_password(message.chat.id, message.from_user.id, draft)
@@ -932,7 +932,7 @@ def handle_admin_state_input(message):
 
         if mode == "draft_wizard_password":
             draft = state["draft"]
-            draft.password = "" if value.lower() in ("", "random", "随机") else value
+            draft.password = "" if value.lower() in ("0", "random", "随机") else value
             ask_draft_method(message.chat.id, message.from_user.id, draft)
             return
 
@@ -966,7 +966,7 @@ def handle_admin_state_input(message):
             draft = state["draft"]
             field = mode.replace("draft_edit_", "")
             if field == "port":
-                if value.lower() in ("random", "随机", ""):
+                if value.lower() in ("0", "random", "随机"):
                     draft.port = ss_manager.random_port()
                     admin_states[message.from_user.id] = {"mode": "draft", "draft": draft}
                     send_draft(message.chat.id, draft)
@@ -979,7 +979,7 @@ def handle_admin_state_input(message):
             elif field == "password":
                 draft.password = (
                     ss_manager.generate_password_for_method(draft.method)
-                    if value.lower() in ("random", "随机", "")
+                    if value.lower() in ("0", "random", "随机")
                     else value
                 )
             elif field == "name":

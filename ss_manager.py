@@ -94,6 +94,8 @@ def init_db() -> None:
                 traffic_limit_gb INTEGER NOT NULL DEFAULT 100,
                 inbound_baseline_bytes INTEGER NOT NULL DEFAULT 0,
                 outbound_baseline_bytes INTEGER NOT NULL DEFAULT 0,
+                inbound_used_bytes INTEGER NOT NULL DEFAULT 0,
+                outbound_used_bytes INTEGER NOT NULL DEFAULT 0,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -131,6 +133,14 @@ def migrate_db(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE ss_users ADD COLUMN outbound_baseline_bytes INTEGER NOT NULL DEFAULT 0"
         )
+    if "inbound_used_bytes" not in columns:
+        conn.execute(
+            "ALTER TABLE ss_users ADD COLUMN inbound_used_bytes INTEGER NOT NULL DEFAULT 0"
+        )
+    if "outbound_used_bytes" not in columns:
+        conn.execute(
+            "ALTER TABLE ss_users ADD COLUMN outbound_used_bytes INTEGER NOT NULL DEFAULT 0"
+        )
     info = {
         row[1]: {"type": row[2], "notnull": row[3], "default": row[4], "pk": row[5]}
         for row in conn.execute("PRAGMA table_info(ss_users)").fetchall()
@@ -152,6 +162,8 @@ def migrate_db(conn: sqlite3.Connection) -> None:
                 traffic_limit_gb INTEGER NOT NULL DEFAULT 100,
                 inbound_baseline_bytes INTEGER NOT NULL DEFAULT 0,
                 outbound_baseline_bytes INTEGER NOT NULL DEFAULT 0,
+                inbound_used_bytes INTEGER NOT NULL DEFAULT 0,
+                outbound_used_bytes INTEGER NOT NULL DEFAULT 0,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -164,12 +176,14 @@ def migrate_db(conn: sqlite3.Connection) -> None:
                 id, tg_user_id, tg_username, display_name, port, method, password,
                 expire_at, expire_disable_enabled, traffic_limit_gb,
                 inbound_baseline_bytes, outbound_baseline_bytes,
+                inbound_used_bytes, outbound_used_bytes,
                 enabled, created_at, updated_at
             )
             SELECT
                 id, tg_user_id, tg_username, display_name, port, method, password,
                 expire_at, expire_disable_enabled, traffic_limit_gb,
                 inbound_baseline_bytes, outbound_baseline_bytes,
+                0, 0,
                 enabled, created_at, updated_at
             FROM ss_users_old
             """
@@ -700,13 +714,11 @@ def ensure_traffic_rules() -> None:
         ensure_chain(bin_name, "BOIL_SS_OUT", "OUTPUT")
         ensure_chain(bin_name, "BOIL_SS_BLOCK", "INPUT")
         for user in users:
+            ensure_rule(bin_name, "BOIL_SS_IN", int(user["port"]), "in", f"boil_ss_user_{user['id']}_in")
+            ensure_rule(bin_name, "BOIL_SS_OUT", int(user["port"]), "out", f"boil_ss_user_{user['id']}_out")
             if int(user.get("enabled", 1)):
                 delete_rule_by_comment(bin_name, "BOIL_SS_BLOCK", f"boil_ss_user_{user['id']}_disabled")
-                ensure_rule(bin_name, "BOIL_SS_IN", int(user["port"]), "in", f"boil_ss_user_{user['id']}_in")
-                ensure_rule(bin_name, "BOIL_SS_OUT", int(user["port"]), "out", f"boil_ss_user_{user['id']}_out")
             else:
-                delete_rule_by_comment(bin_name, "BOIL_SS_IN", f"boil_ss_user_{user['id']}_in")
-                delete_rule_by_comment(bin_name, "BOIL_SS_OUT", f"boil_ss_user_{user['id']}_out")
                 ensure_rule(bin_name, "BOIL_SS_BLOCK", int(user["port"]), "in", f"boil_ss_user_{user['id']}_disabled", "REJECT")
 
 
@@ -803,7 +815,7 @@ def get_user_traffic_raw(user: dict[str, Any]) -> dict[str, int]:
 
 def get_user_traffic(user: dict[str, Any]) -> dict[str, int]:
     raw = get_user_traffic_raw(user)
-    return {
+    current = {
         "inbound_bytes": max(
             0, raw["inbound_bytes"] - int(user.get("inbound_baseline_bytes") or 0)
         ),
@@ -811,6 +823,31 @@ def get_user_traffic(user: dict[str, Any]) -> dict[str, int]:
             0, raw["outbound_bytes"] - int(user.get("outbound_baseline_bytes") or 0)
         ),
     }
+    stored = {
+        "inbound_bytes": int(user.get("inbound_used_bytes") or 0),
+        "outbound_bytes": int(user.get("outbound_used_bytes") or 0),
+    }
+    usage = {
+        "inbound_bytes": max(current["inbound_bytes"], stored["inbound_bytes"]),
+        "outbound_bytes": max(current["outbound_bytes"], stored["outbound_bytes"]),
+    }
+    if usage != stored:
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE ss_users
+                SET inbound_used_bytes = ?, outbound_used_bytes = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    usage["inbound_bytes"],
+                    usage["outbound_bytes"],
+                    now_text(),
+                    user["id"],
+                ),
+            )
+            conn.commit()
+    return usage
 
 
 def enforce_traffic_limits() -> int:

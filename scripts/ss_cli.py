@@ -27,8 +27,9 @@ def add_user():
     display_name = input("请输入显示名，留空自动生成：").strip() or tg_username.replace("@", "") or (f"user_{tg_user_id}" if tg_user_id is not None else "manual_user")
     protocol_raw = input("请选择类型：1. 普通 SS  2. SS2022，留空默认 2：").strip()
     protocol = "ss" if protocol_raw == "1" else "ss2022"
-    port_raw = input("请输入端口，留空随机：").strip()
-    password = input("请输入密码，留空随机：").strip() or None
+    port_raw = input("请输入端口，输入 0 或留空随机：").strip()
+    password_raw = input("请输入密码，输入 0 或留空随机：").strip()
+    password = None if password_raw in ("", "0", "random", "随机") else password_raw
     methods = ss_manager.methods_for_protocol(protocol)
     print("请选择加密方式：")
     for idx, method in enumerate(methods, start=1):
@@ -43,7 +44,7 @@ def add_user():
         tg_user_id=tg_user_id,
         tg_username=tg_username,
         display_name=display_name,
-        port=int(port_raw) if port_raw else None,
+        port=int(port_raw) if port_raw and port_raw != "0" else None,
         method=method,
         password=password,
         expire_at=expire_at,
