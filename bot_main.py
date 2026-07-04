@@ -466,6 +466,16 @@ def start_api_token_config(chat_id: int, admin_id: int):
 
 
 def send_devices_for_change(chat_id: int, call=None):
+    if not IP_PANEL_TOKEN:
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton(BTN_API_TOKEN, callback_data="menu_api_token"))
+        text = "IPPanel API Token 未配置。请先配置 Token 后再获取当前 IP。"
+        if call:
+            safe_edit(call, text, reply_markup=markup)
+        else:
+            bot.send_message(chat_id, text, reply_markup=markup)
+        return
+
     devices = api.get_devices_list()
     if not devices:
         text = "未获取到当前 IP，请检查 IPPanel API Token 是否正确。"
