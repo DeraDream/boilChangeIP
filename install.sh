@@ -144,18 +144,18 @@ ensure_dependencies() {
 }
 
 write_env() {
-  local account password bot_token tg_user_id ss_public_host
-  account="$(prompt_value '请输入 IPPanel 账号')"
-  password="$(prompt_value '请输入 IPPanel 密码' 1)"
+  local ip_panel_token bot_token tg_user_id ddns_domain ss_public_host
+  ip_panel_token="$(prompt_value '请输入 IPPanel API Token')"
   bot_token="$(prompt_value 'Telegram Bot Token')"
   tg_user_id="$(prompt_value '请输入 Telegram 用户 ID')"
+  ddns_domain="$(prompt_value '请输入 DDNS 监听域名，留空则使用 SS 公网地址/域名')"
   ss_public_host="$(prompt_value '请输入 SS 公网地址或域名，留空自动获取')"
 
   cat > "$ENV_FILE" <<EOF_ENV
 BOT_TOKEN=$bot_token
 ALLOWED_USERS=$tg_user_id
-ACCOUNT=$account
-PASSWORD=$password
+IP_PANEL_TOKEN=$ip_panel_token
+DDNS_DOMAIN=$ddns_domain
 SS_PUBLIC_HOST=$ss_public_host
 EOF_ENV
   chmod 600 "$ENV_FILE"

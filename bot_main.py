@@ -1,4 +1,6 @@
 import html
+import ipaddress
+import socket
 import subprocess
 import threading
 import time
@@ -6,8 +8,10 @@ from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Dict
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
+import requests
 import schedule
 import telebot
 from telebot.apihelper import ApiTelegramException
@@ -19,22 +23,22 @@ from telebot.types import (
 )
 
 from api_client import IPPanelClient
-from config import MONITOR_SCRIPT, get_version, load_env, parse_allowed_users
+from config import MONITOR_SCRIPT, get_version, load_env, parse_allowed_users, set_env_value
 import ss_manager
 
 
 env = load_env()
 BOT_TOKEN = env.get("BOT_TOKEN", "")
 ALLOWED_USERS = parse_allowed_users(env.get("ALLOWED_USERS", ""))
-ACCOUNT = env.get("ACCOUNT", "")
-PASSWORD = env.get("PASSWORD", "")
+IP_PANEL_TOKEN = env.get("IP_PANEL_TOKEN") or env.get("IPPANEL_TOKEN", "")
+DDNS_DOMAIN = env.get("DDNS_DOMAIN") or env.get("SS_PUBLIC_HOST", "")
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
 
 if not BOT_TOKEN:
     raise SystemExit("缺少 BOT_TOKEN，请运行 ./install.sh 或 boiltg 进行配置。")
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
-api = IPPanelClient(ACCOUNT, PASSWORD)
+api = IPPanelClient(IP_PANEL_TOKEN)
 ss_manager.init_db()
 
 user_states: Dict[int, Dict[str, Any]] = {}
@@ -47,6 +51,7 @@ BTN_USER_MGMT = "5. 用户管理"
 BTN_DELETE_USER = "6. 删除用户"
 BTN_NOTIFY = "7. TG 通知"
 BTN_BIND_DOMAIN = "8. 绑定域名"
+BTN_API_TOKEN = "9. 配置 API Token"
 BTN_REQUEST_SS = "申请 SS 链接"
 BTN_MY_SS = "我的链接"
 BTN_CHANGE_IP = "更换 IP"
@@ -65,6 +70,7 @@ def main_menu() -> InlineKeyboardMarkup:
         InlineKeyboardButton(BTN_DELETE_USER, callback_data="menu_delete_user"),
         InlineKeyboardButton(BTN_NOTIFY, callback_data="menu_notify"),
         InlineKeyboardButton(BTN_BIND_DOMAIN, callback_data="menu_bind_domain"),
+        InlineKeyboardButton(BTN_API_TOKEN, callback_data="menu_api_token"),
     )
     return markup
 
@@ -80,6 +86,7 @@ def reply_menu() -> ReplyKeyboardMarkup:
         KeyboardButton(BTN_DELETE_USER),
         KeyboardButton(BTN_NOTIFY),
         KeyboardButton(BTN_BIND_DOMAIN),
+        KeyboardButton(BTN_API_TOKEN),
     )
     return markup
 
@@ -110,6 +117,22 @@ def device_markup(devices: list[dict[str, Any]]) -> InlineKeyboardMarkup:
         label = f"{dev['name']} | {dev['current_ip']}"
         markup.add(InlineKeyboardButton(label[:64], callback_data=f"change_now_{idx}"))
     return markup
+
+
+def masked_token() -> str:
+    if not IP_PANEL_TOKEN:
+        return "未配置"
+    if len(IP_PANEL_TOKEN) <= 8:
+        return "*" * len(IP_PANEL_TOKEN)
+    return f"{IP_PANEL_TOKEN[:4]}...{IP_PANEL_TOKEN[-4:]}"
+
+
+def is_ipv4(value: str) -> bool:
+    try:
+        ipaddress.IPv4Address(str(value).strip())
+        return True
+    except ipaddress.AddressValueError:
+        return False
 
 
 def check_permission(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -168,8 +191,9 @@ def safe_edit(call, text: str, reply_markup=None, parse_mode=None):
             reply_markup=reply_markup,
             parse_mode=parse_mode,
         )
+        return call.message
     except Exception:
-        bot.send_message(
+        return bot.send_message(
             call.message.chat.id,
             text,
             reply_markup=reply_markup,
@@ -203,6 +227,12 @@ def handle_ip_change(message):
     send_devices_for_change(message.chat.id)
 
 
+@bot.message_handler(commands=["api_token"])
+@check_admin
+def handle_api_token_command(message):
+    start_api_token_config(message.chat.id, message.from_user.id)
+
+
 def status_text() -> str:
     users = ss_manager.list_users()
     total_in = 0
@@ -220,12 +250,14 @@ def status_text() -> str:
         )
 
     traffic_text = "\n".join(traffic_lines) if traffic_lines else "暂无用户流量。"
-    account_text = (ACCOUNT or "未配置").replace("@", "@\u200b")
+    token_text = masked_token()
+    domain_text = ddns_domain() or "未配置"
     return (
         "Bot 状态：运行中\n"
         f"版本：{get_version()}\n"
         f"授权用户：{', '.join(str(x) for x in ALLOWED_USERS) or '未配置'}\n"
-        f"IPPanel 账号：{account_text}\n"
+        f"IPPanel API Token：{token_text}\n"
+        f"DDNS 监听域名：{domain_text}\n"
         f"SS 用户数：{len(users)}\n"
         f"总入站：{ss_manager.format_bytes(total_in)}\n"
         f"总出站：{ss_manager.format_bytes(total_out)}\n"
@@ -308,6 +340,12 @@ def handle_reply_notify(message):
 @check_admin
 def handle_reply_bind_domain(message):
     start_bind_domain(message.chat.id, message.from_user.id)
+
+
+@bot.message_handler(func=lambda message: message.text == BTN_API_TOKEN)
+@check_admin
+def handle_reply_api_token(message):
+    start_api_token_config(message.chat.id, message.from_user.id)
 
 
 def send_my_ss(chat_id: int, tg_user_id: int):
@@ -417,10 +455,20 @@ def start_bind_domain(chat_id: int, admin_id: int):
     bot.send_message(chat_id, f"请输入要绑定的域名。\n当前：{current}")
 
 
+def start_api_token_config(chat_id: int, admin_id: int):
+    admin_states[admin_id] = {"mode": "api_token_input"}
+    bot.send_message(
+        chat_id,
+        "请输入新的 IPPanel API Token。\n"
+        "Token 会写入 .env 的 IP_PANEL_TOKEN，保存后会自动重启 Bot 服务。\n"
+        f"当前：{masked_token()}",
+    )
+
+
 def send_devices_for_change(chat_id: int, call=None):
     devices = api.get_devices_list()
     if not devices:
-        text = "未获取到设备，或 IPPanel 登录失败。"
+        text = "未获取到当前 IP，请检查 IPPanel API Token 是否正确。"
         if call:
             safe_edit(call, text)
         else:
@@ -428,7 +476,7 @@ def send_devices_for_change(chat_id: int, call=None):
         return
 
     user_states[chat_id] = {"devices_cache": devices}
-    lines = ["设备列表如下，点击设备按钮后会立即执行换 IP。", ""]
+    lines = ["当前 IP 如下，点击按钮后会通过官方 API 执行换 IP。", ""]
     for idx, dev in enumerate(devices, start=1):
         lines.append(f"{idx}. {dev['name']}")
         lines.append(f"   当前 IP：{dev['current_ip']}")
@@ -496,6 +544,13 @@ def handle_menu_bind_domain(call):
     start_bind_domain(call.message.chat.id, call.from_user.id)
 
 
+@bot.callback_query_handler(func=lambda call: call.data == "menu_api_token")
+@check_admin
+def handle_menu_api_token(call):
+    bot.answer_callback_query(call.id)
+    start_api_token_config(call.message.chat.id, call.from_user.id)
+
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith("notify_"))
 @check_admin
 def handle_notify_actions(call):
@@ -539,8 +594,12 @@ def handle_change_now(call):
         return
 
     bot.answer_callback_query(call.id, "正在更换 IP...")
-    safe_edit(call, f"正在为 {device['name']} 更换 IP...")
-    execute_ip_change(chat_id, device)
+    status_message = safe_edit(call, f"正在为 {device['name']} 更换 IP...")
+    threading.Thread(
+        target=run_ip_change_flow,
+        args=(chat_id, device, status_message),
+        daemon=True,
+    ).start()
     user_states.pop(chat_id, None)
 
 
@@ -681,6 +740,16 @@ def handle_admin_state_input(message):
     mode = state.get("mode", "")
     value = (message.text or "").strip()
     try:
+        if mode == "api_token_input":
+            if not value:
+                bot.send_message(message.chat.id, "Token 不能为空，请重新发送。")
+                return
+            set_env_value("IP_PANEL_TOKEN", value)
+            admin_states.pop(message.from_user.id, None)
+            bot.send_message(message.chat.id, "IPPanel API Token 已保存，Bot 服务即将重启。")
+            threading.Timer(2, restart_bot_service).start()
+            return
+
         if mode == "bind_domain_input":
             host = ss_manager.normalize_public_host(value)
             admin_states[message.from_user.id] = {
@@ -783,28 +852,207 @@ def restart_bot_service():
     subprocess.run(["systemctl", "restart", "boil-change-ip"], check=False)
 
 
-def execute_ip_change(chat_id: int, device: dict[str, Any]):
-    router_id = device["router_id"]
-    interface = device["interface"]
+def delete_status_message(message) -> None:
+    if not message:
+        return
+    try:
+        bot.delete_message(message.chat.id, message.message_id)
+    except Exception:
+        pass
+
+
+def replace_status_message(chat_id: int, previous_message, text: str):
+    delete_status_message(previous_message)
+    return bot.send_message(chat_id, text, parse_mode="HTML")
+
+
+def normalize_domain(value: str) -> str:
+    value = (value or "").strip()
+    if not value:
+        return ""
+    if "://" in value:
+        parsed = urlparse(value)
+        value = parsed.hostname or value
+    value = value.split("/", 1)[0].split(":", 1)[0].strip().strip(".")
+    return value
+
+
+def ddns_domain() -> str:
+    return normalize_domain(DDNS_DOMAIN)
+
+
+def should_wait_for_ddns(domain: str) -> bool:
+    return bool(domain) and not is_ipv4(domain)
+
+
+def resolve_domain_ipv4(domain: str) -> list[str]:
+    ips: list[str] = []
+    try:
+        resp = requests.get(
+            "https://cloudflare-dns.com/dns-query",
+            params={"name": domain, "type": "A"},
+            headers={"accept": "application/dns-json"},
+            timeout=10,
+        )
+        if resp.ok:
+            data = resp.json()
+            for answer in data.get("Answer", []) or []:
+                ip = str(answer.get("data", "")).strip()
+                if is_ipv4(ip):
+                    ips.append(ip)
+    except Exception:
+        pass
+
+    if ips:
+        return sorted(set(ips))
+
+    try:
+        for item in socket.getaddrinfo(domain, None, socket.AF_INET):
+            ip = item[4][0]
+            if is_ipv4(ip):
+                ips.append(ip)
+    except OSError:
+        pass
+    return sorted(set(ips))
+
+
+def wait_for_new_ip(old_ip: str, timeout_seconds: int = 300, interval: int = 10) -> tuple[bool, str]:
+    deadline = time.monotonic() + timeout_seconds
+    last_result = ""
+    while time.monotonic() < deadline:
+        ok, current_ip = api.get_current_ip()
+        last_result = current_ip
+        if ok and current_ip and current_ip != old_ip:
+            return True, current_ip
+        time.sleep(interval)
+    return False, last_result or "等待 BOIL 返回新 IP 超时"
+
+
+def wait_for_domain_ip(domain: str, expected_ip: str, timeout_seconds: int = 600, interval: int = 10) -> tuple[bool, list[str]]:
+    deadline = time.monotonic() + timeout_seconds
+    last_ips: list[str] = []
+    while time.monotonic() < deadline:
+        last_ips = resolve_domain_ipv4(domain)
+        if expected_ip in last_ips:
+            return True, last_ips
+        time.sleep(interval)
+    return False, last_ips
+
+
+def run_ip_change_flow(chat_id: int, device: dict[str, Any], status_message=None):
+    try:
+        execute_ip_change(chat_id, device, status_message=status_message)
+    except Exception as exc:
+        replace_status_message(
+            chat_id,
+            status_message,
+            f"<b>换 IP 流程异常</b>\n\n{html.escape(str(exc))}",
+        )
+
+
+def execute_ip_change(chat_id: int, device: dict[str, Any], status_message=None):
     old_ip = device.get("current_ip", "未知")
+    domain = ddns_domain()
+    should_check_ddns = should_wait_for_ddns(domain)
+    old_domain_ips = resolve_domain_ipv4(domain) if should_check_ddns else []
 
-    success, result = api.change_ip(router_id, interface)
+    status_message = replace_status_message(
+        chat_id,
+        status_message,
+        (
+            "<b>正在执行更换 IP</b>\n\n"
+            f"目标：{html.escape(str(device['name']))}\n"
+            f"旧 IP：<code>{html.escape(str(old_ip))}</code>"
+        ),
+    )
+    success, result = api.change_ip()
+    if not success:
+        replace_status_message(
+            chat_id,
+            status_message,
+            (
+                "<b>IP 更换失败</b>\n\n"
+                f"目标：{html.escape(str(device['name']))}\n"
+                f"原因：{html.escape(str(result))}"
+            ),
+        )
+        return schedule.CancelJob
 
-    if success:
-        text = (
-            "<b>IP 更换成功</b>\n\n"
-            f"设备：{html.escape(str(device['name']))}\n"
+    status_message = replace_status_message(
+        chat_id,
+        status_message,
+        (
+            "<b>BOIL 已受理换 IP</b>\n\n"
+            f"<code>{html.escape(str(result))}</code>\n\n"
+            "正在轮询 BOIL 当前 IP..."
+        ),
+    )
+    got_new_ip, new_ip = wait_for_new_ip(str(old_ip))
+    if not got_new_ip:
+        replace_status_message(
+            chat_id,
+            status_message,
+            (
+                "<b>换 IP 状态未确认</b>\n\n"
+                f"旧 IP：<code>{html.escape(str(old_ip))}</code>\n"
+                f"最后查询结果：<code>{html.escape(str(new_ip))}</code>\n"
+                "BOIL 已受理请求，但在等待时间内没有查询到新 IP。"
+            ),
+        )
+        return schedule.CancelJob
+
+    if not should_check_ddns:
+        reason = (
+            "未配置 DDNS_DOMAIN 或 SS_PUBLIC_HOST"
+            if not domain
+            else "DDNS_DOMAIN 或 SS_PUBLIC_HOST 当前是 IP 地址，不是域名"
+        )
+        replace_status_message(
+            chat_id,
+            status_message,
+            (
+                "<b>换 IP 成功</b>\n\n"
+                f"旧 IP：<code>{html.escape(str(old_ip))}</code>\n"
+                f"新 IP：<code>{html.escape(str(new_ip))}</code>\n\n"
+                f"{html.escape(reason)}，已跳过 DDNS 解析确认。"
+            ),
+        )
+        return schedule.CancelJob
+
+    old_domain_text = ", ".join(old_domain_ips) if old_domain_ips else "未解析到 A 记录"
+    status_message = replace_status_message(
+        chat_id,
+        status_message,
+        (
+            "<b>换 IP 成功</b>\n\n"
             f"旧 IP：<code>{html.escape(str(old_ip))}</code>\n"
-            f"新 IP：<code>{html.escape(str(result))}</code>"
+            f"新 IP：<code>{html.escape(str(new_ip))}</code>\n"
+            f"域名：<code>{html.escape(domain)}</code>\n"
+            f"原解析：<code>{html.escape(old_domain_text)}</code>\n\n"
+            "正在等待 DDNS-GO 刷新域名解析..."
+        ),
+    )
+
+    ddns_ok, domain_ips = wait_for_domain_ip(domain, str(new_ip))
+    domain_text = ", ".join(domain_ips) if domain_ips else "未解析到 A 记录"
+    if ddns_ok:
+        text = (
+            "<b>DDNS-GO 已刷新完成</b>\n\n"
+            f"域名：<code>{html.escape(domain)}</code>\n"
+            f"旧 IP：<code>{html.escape(str(old_ip))}</code>\n"
+            f"新 IP：<code>{html.escape(str(new_ip))}</code>\n"
+            f"当前解析：<code>{html.escape(domain_text)}</code>"
         )
     else:
         text = (
-            "<b>IP 更换失败</b>\n\n"
-            f"设备：{html.escape(str(device['name']))}\n"
-            f"原因：{html.escape(str(result))}"
+            "<b>换 IP 成功，但 DDNS 解析未确认</b>\n\n"
+            f"域名：<code>{html.escape(domain)}</code>\n"
+            f"旧 IP：<code>{html.escape(str(old_ip))}</code>\n"
+            f"新 IP：<code>{html.escape(str(new_ip))}</code>\n"
+            f"当前解析：<code>{html.escape(domain_text)}</code>\n"
+            "DDNS-GO 可能还没刷新，或 DNS 缓存还没生效。"
         )
-
-    bot.send_message(chat_id, text, parse_mode="HTML")
+    replace_status_message(chat_id, status_message, text)
     return schedule.CancelJob
 
 

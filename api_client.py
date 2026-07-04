@@ -1,14 +1,14 @@
 import threading
+import ipaddress
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
 
 class IPPanelClient:
-    def __init__(self, account: str, password: str, timeout: int = 20):
+    def __init__(self, token: str, timeout: int = 20):
         self.base_url = "https://ippanel.boil.network"
-        self.account = account
-        self.password = password
+        self.token = token.strip()
         self.timeout = timeout
         self._lock = threading.Lock()
         self.session = self._new_session()
@@ -17,123 +17,89 @@ class IPPanelClient:
         session = requests.Session()
         session.headers.update(
             {
+                "Authorization": f"Bearer {self.token}",
                 "User-Agent": (
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36"
-                )
+                ),
             }
         )
         return session
 
-    def login(self) -> bool:
-        """登录 IPPanel，并在 session 中保存 cookie。"""
-        payload = {"account": self.account, "password": self.password}
+    def _post(self, path: str) -> Tuple[bool, Dict[str, Any] | str]:
+        if not self.token:
+            return False, "IPPanel API Token 未配置。"
+
         try:
             with self._lock:
                 resp = self.session.post(
-                    f"{self.base_url}/login", data=payload, timeout=self.timeout
-                )
-                resp.raise_for_status()
-                return "session" in self.session.cookies.get_dict()
-        except requests.RequestException:
-            return False
-
-    def get_raw_data(self) -> Optional[Dict[str, Any]]:
-        """获取原始设备 JSON 数据。"""
-        try:
-            with self._lock:
-                resp = self.session.post(
-                    f"{self.base_url}/api/query_all", timeout=self.timeout
-                )
-                resp.raise_for_status()
-                return resp.json()
-        except (requests.RequestException, ValueError):
-            return None
-
-    def get_formatted_status(self) -> str:
-        """返回 /list 使用的中文格式化文本。"""
-        if not self.login():
-            return "登录失败，请检查 IPPanel 账号和密码。"
-
-        data = self.get_raw_data()
-        if not data:
-            return "获取设备数据失败。"
-
-        limit = data.get("daily_limit", 0)
-        used = data.get("daily_used", 0)
-
-        report = "=== 设备状态 ===\n"
-        report += f"今日换 IP 额度：已用 {used} / 总共 {limit}\n\n"
-
-        zone_items = data.get("zone_items", [])
-        results = data.get("results", {})
-
-        if not zone_items:
-            return report + "未找到设备。"
-
-        for item in zone_items:
-            product_name = item.get("product_name") or "未知设备"
-            status = item.get("status") or "未知"
-            router_id = item.get("router_id")
-            interface = item.get("interface")
-            public_ip = results.get(router_id, {}).get(interface, "未知 IP")
-            status_text = "正常" if status == "ok" else f"异常（{status}）"
-
-            report += f"设备：{product_name}\n"
-            report += f"状态：{status_text}\n"
-            report += f"路由/接口：{router_id} / {interface}\n"
-            report += f"当前公网 IP：{public_ip}\n"
-            report += "-" * 30 + "\n"
-
-        return report
-
-    def get_devices_list(self) -> List[Dict[str, Any]]:
-        """返回结构化设备列表，用于 Telegram 按钮。"""
-        if not self.login():
-            return []
-
-        data = self.get_raw_data()
-        if not data:
-            return []
-
-        devices = []
-        results = data.get("results", {})
-        for item in data.get("zone_items", []):
-            router_id = item.get("router_id")
-            interface = item.get("interface")
-            current_ip = results.get(router_id, {}).get(interface, "未知")
-            if not router_id or not interface:
-                continue
-            devices.append(
-                {
-                    "name": item.get("product_name") or f"{router_id}/{interface}",
-                    "router_id": router_id,
-                    "interface": interface,
-                    "current_ip": current_ip,
-                }
-            )
-        return devices
-
-    def change_ip(self, router_id: str, interface: str) -> Tuple[bool, str]:
-        """调用原有 reconnect 接口执行换 IP。"""
-        if not self.login():
-            return False, "登录失败。"
-
-        payload = {"router_id": router_id, "interface": interface}
-        try:
-            with self._lock:
-                resp = self.session.post(
-                    f"{self.base_url}/api/reconnect",
-                    json=payload,
+                    f"{self.base_url}{path}",
                     timeout=self.timeout,
                 )
-                resp.raise_for_status()
-                result = resp.json()
+                try:
+                    data = resp.json()
+                except ValueError:
+                    data = {}
+                if resp.ok:
+                    return True, data
+                if isinstance(data, dict) and data.get("error"):
+                    return False, str(data["error"])
+                return False, f"HTTP {resp.status_code}: {resp.text[:500]}"
         except requests.RequestException as exc:
             return False, f"HTTP 请求失败：{exc}"
-        except ValueError:
-            return False, "IPPanel 返回了无效 JSON。"
 
+    def get_raw_data(self) -> Optional[Dict[str, Any]]:
+        ok, result = self._post("/api/v1/getIP")
+        if ok and isinstance(result, dict):
+            return result
+        return None
+
+    def get_current_ip(self) -> Tuple[bool, str]:
+        ok, result = self._post("/api/v1/getIP")
+        if not ok:
+            return False, str(result)
+        if not isinstance(result, dict):
+            return False, "IPPanel 返回了无效 JSON。"
         if result.get("ok"):
-            return True, str(result.get("new_ip") or "未知")
-        return False, str(result)
+            ip = str(result.get("ip") or "").strip()
+            try:
+                ipaddress.IPv4Address(ip)
+            except ipaddress.AddressValueError:
+                return False, f"IPPanel 未返回有效 IPv4：{result}"
+            return True, ip
+        return False, str(result.get("error") or result)
+
+    def get_formatted_status(self) -> str:
+        ok, result = self.get_current_ip()
+        if not ok:
+            return f"获取当前 IP 失败：{result}"
+        return f"=== IPPanel 状态 ===\n当前公网 IP：{result}"
+
+    def get_devices_list(self) -> List[Dict[str, Any]]:
+        ok, result = self.get_current_ip()
+        if not ok:
+            return []
+        return [
+            {
+                "name": "IPPanel API",
+                "current_ip": result,
+            }
+        ]
+
+    def change_ip(self) -> Tuple[bool, str]:
+        ok, result = self._post("/api/v1/changeIP/")
+        if not ok:
+            return False, str(result)
+        if not isinstance(result, dict):
+            return False, "IPPanel 返回了无效 JSON。"
+        if result.get("ok"):
+            message = str(result.get("message") or "正在执行更换 IP")
+            uses_left = result.get("uses_left")
+            next_allowed_at = result.get("next_allowed_at")
+            extras = []
+            if uses_left is not None:
+                extras.append(f"剩余次数：{uses_left}")
+            if next_allowed_at is not None:
+                extras.append(f"下次可用时间戳：{next_allowed_at}")
+            return True, "\n".join([message, *extras])
+        return False, str(result.get("error") or result)

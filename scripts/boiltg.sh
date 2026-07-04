@@ -249,8 +249,8 @@ modify_config() {
     echo "修改配置"
     echo "1. 修改 Telegram Bot Token"
     echo "2. 修改 Telegram 用户 ID"
-    echo "3. 修改 IPPanel 账号"
-    echo "4. 修改 IPPanel 密码"
+    echo "3. 修改 IPPanel API Token"
+    echo "4. 修改 DDNS 监听域名"
     echo "5. 修改 SS 公网地址/域名"
     echo "0. 返回"
     read -r -p "请选择： " choice
@@ -269,15 +269,14 @@ modify_config() {
         echo "已保存配置并重启服务。"
         ;;
       3)
-        read -r -p "请输入新的 IPPanel 账号： " value
-        set_env_value "ACCOUNT" "$value"
+        read -r -p "请输入新的 IPPanel API Token： " value
+        set_env_value "IP_PANEL_TOKEN" "$value"
         restart_service
         echo "已保存配置并重启服务。"
         ;;
       4)
-        read -r -s -p "请输入新的 IPPanel 密码： " value
-        echo
-        set_env_value "PASSWORD" "$value"
+        read -r -p "请输入新的 DDNS 监听域名，留空则使用 SS 公网地址/域名： " value
+        set_env_value "DDNS_DOMAIN" "$value"
         restart_service
         echo "已保存配置并重启服务。"
         ;;
