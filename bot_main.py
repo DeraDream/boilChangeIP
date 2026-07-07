@@ -1692,7 +1692,7 @@ def send_ip_quality(chat_id: int, waiting_message=None):
             cwd=str(Path(__file__).resolve().parent),
             capture_output=True,
             text=True,
-            timeout=180,
+            timeout=600,
         )
     except FileNotFoundError:
         delete_status_message(waiting_message)
@@ -1700,7 +1700,7 @@ def send_ip_quality(chat_id: int, waiting_message=None):
         return
     except subprocess.TimeoutExpired:
         delete_status_message(waiting_message)
-        bot.send_message(chat_id, "IP 质量检测超时。")
+        bot.send_message(chat_id, "IP 质量检测超时（超过 10 分钟）。")
         return
 
     if result.returncode != 0:

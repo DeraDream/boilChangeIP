@@ -207,6 +207,7 @@ set +e
 bash <(curl -fsSL https://IP.Check.Place) -o "$RAW_ANSI_FILE" > "$RUN_LOG_FILE" 2>&1
 CHECK_STATUS=$?
 set -e
+log "远程检测命令已结束，退出码：$CHECK_STATUS"
 
 if [ ! -s "$RAW_ANSI_FILE" ]; then
   echo "IP.Check.Place 未生成最终 ANSI 报告。" >&2
@@ -222,11 +223,13 @@ if [ "$CHECK_STATUS" -ne 0 ]; then
   log "IP.Check.Place 退出码为 $CHECK_STATUS，但已生成最终 ANSI 报告，继续生成图片。"
 fi
 
+log "开始提取 IP 质量主报告。"
 if ! extract_quality_sections "$RAW_ANSI_FILE" "$ANSI_FILE"; then
   echo "提取 IP 质量主报告失败。" >&2
   tail -n 80 "$RAW_ANSI_FILE" >&2 || true
   exit 1
 fi
+log "IP 质量主报告提取完成。"
 
 if [ ! -s "$ANSI_FILE" ]; then
   echo "提取后的 IP 质量主报告为空。" >&2
@@ -234,12 +237,14 @@ if [ ! -s "$ANSI_FILE" ]; then
   exit 1
 fi
 
+log "开始渲染 IP 质量 PNG 图片。"
 if ! render_png "$ANSI_FILE" "$PNG_FILE"; then
   echo "PNG 图片生成失败。" >&2
   echo "最终 ANSI 报告最后 40 行：" >&2
   tail -n 40 "$ANSI_FILE" >&2 || true
   exit 1
 fi
+log "IP 质量 PNG 图片渲染完成。"
 
 if [ ! -f "$PNG_FILE" ]; then
   echo "PNG 图片生成失败。" >&2
@@ -249,6 +254,7 @@ if [ ! -f "$PNG_FILE" ]; then
 fi
 
 if [ "$IMAGE_ONLY" -eq 1 ]; then
+  log "以 image-only 模式返回图片路径：$PNG_FILE"
   printf '%s\n' "$PNG_FILE"
   exit 0
 fi
