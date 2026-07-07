@@ -1,5 +1,6 @@
 import html
 import ipaddress
+import secrets
 import socket
 import subprocess
 import threading
@@ -14,7 +15,6 @@ from zoneinfo import ZoneInfo
 import requests
 import schedule
 import telebot
-from telebot.apihelper import ApiTelegramException
 from telebot.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -53,11 +53,20 @@ BTN_DELETE_USER = "6. 删除用户"
 BTN_NOTIFY = "7. TG 通知"
 BTN_BIND_DOMAIN = "8. 绑定域名"
 BTN_API_TOKEN = "9. 配置 API Token"
+BTN_DOMAIN_CHECK = "10. 检查域名解析"
 BTN_REQUEST_SS = "申请 SS 链接"
 BTN_MY_SS = "我的链接"
 BTN_CHANGE_IP = "更换 IP"
 
 admin_states: Dict[int, Dict[str, Any]] = {}
+ddns_retry_states: Dict[str, Dict[str, str]] = {}
+ip_change_state: Dict[str, str] = {
+    "active": "0",
+    "pending_ddns": "0",
+    "domain": "",
+    "old_ip": "",
+    "new_ip": "",
+}
 
 
 def main_menu() -> InlineKeyboardMarkup:
@@ -72,6 +81,7 @@ def main_menu() -> InlineKeyboardMarkup:
         InlineKeyboardButton(BTN_NOTIFY, callback_data="menu_notify"),
         InlineKeyboardButton(BTN_BIND_DOMAIN, callback_data="menu_bind_domain"),
         InlineKeyboardButton(BTN_API_TOKEN, callback_data="menu_api_token"),
+        InlineKeyboardButton(BTN_DOMAIN_CHECK, callback_data="menu_domain_check"),
     )
     return markup
 
@@ -88,6 +98,7 @@ def reply_menu() -> ReplyKeyboardMarkup:
         KeyboardButton(BTN_NOTIFY),
         KeyboardButton(BTN_BIND_DOMAIN),
         KeyboardButton(BTN_API_TOKEN),
+        KeyboardButton(BTN_DOMAIN_CHECK),
     )
     return markup
 
@@ -134,6 +145,36 @@ def is_ipv4(value: str) -> bool:
         return True
     except ipaddress.AddressValueError:
         return False
+
+
+def set_ip_change_state(
+    *,
+    active: bool | None = None,
+    pending_ddns: bool | None = None,
+    domain: str | None = None,
+    old_ip: str | None = None,
+    new_ip: str | None = None,
+) -> None:
+    if active is not None:
+        ip_change_state["active"] = "1" if active else "0"
+    if pending_ddns is not None:
+        ip_change_state["pending_ddns"] = "1" if pending_ddns else "0"
+    if domain is not None:
+        ip_change_state["domain"] = domain
+    if old_ip is not None:
+        ip_change_state["old_ip"] = old_ip
+    if new_ip is not None:
+        ip_change_state["new_ip"] = new_ip
+
+
+def domain_check_block_reason() -> str:
+    if ip_change_state.get("active") == "1":
+        return "当前正在轮换 IP，请等待本次换 IP 流程结束后再查询。"
+    if ip_change_state.get("pending_ddns") == "1":
+        domain = ip_change_state.get("domain") or "当前监听域名"
+        new_ip = ip_change_state.get("new_ip") or "新 IP"
+        return f"当前 DDNS 还未确认生效：{domain} -> {new_ip}。请先等待生效，或继续轮询 DDNS。"
+    return ""
 
 
 def check_permission(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -347,6 +388,12 @@ def handle_reply_bind_domain(message):
 @check_admin
 def handle_reply_api_token(message):
     start_api_token_config(message.chat.id, message.from_user.id)
+
+
+@bot.message_handler(func=lambda message: message.text == BTN_DOMAIN_CHECK)
+@check_admin
+def handle_reply_domain_check(message):
+    send_domain_check(message.chat.id)
 
 
 def send_my_ss(chat_id: int, tg_user_id: int):
@@ -647,6 +694,18 @@ def handle_menu_api_token(call):
     start_api_token_config(call.message.chat.id, call.from_user.id)
 
 
+@bot.callback_query_handler(func=lambda call: call.data == "menu_domain_check")
+@check_admin
+def handle_menu_domain_check(call):
+    blocked = domain_check_block_reason()
+    if blocked:
+        bot.answer_callback_query(call.id, blocked, show_alert=True)
+        return
+    bot.answer_callback_query(call.id, "正在查询最新域名解析...")
+    safe_edit(call, "正在查询当前 IP 和域名解析，请稍候...")
+    send_domain_check(call.message.chat.id)
+
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith("manual_"))
 @check_admin
 def handle_manual_create_choice(call):
@@ -759,6 +818,29 @@ def handle_notify_actions(call):
 def handle_user_change_ip(call):
     bot.answer_callback_query(call.id, "正在获取设备...")
     send_devices_for_change(call.message.chat.id, call=call)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("retry_ddns_"))
+@check_ss_or_admin
+def handle_retry_ddns(call):
+    token = call.data.removeprefix("retry_ddns_")
+    state = ddns_retry_states.pop(token, None)
+    if not state:
+        bot.answer_callback_query(call.id, "重试入口已过期，请重新换 IP 或稍后再试。", show_alert=True)
+        return
+
+    bot.answer_callback_query(call.id, "正在继续轮询 DDNS...")
+    threading.Thread(
+        target=run_ddns_retry_flow,
+        args=(
+            call.message.chat.id,
+            state["domain"],
+            state["old_ip"],
+            state["new_ip"],
+            call.message,
+        ),
+        daemon=True,
+    ).start()
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("change_now_"))
@@ -1169,6 +1251,117 @@ def replace_status_message(chat_id: int, previous_message, text: str):
     return bot.send_message(chat_id, text, parse_mode="HTML")
 
 
+def make_ddns_retry_markup(token: str) -> InlineKeyboardMarkup:
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(InlineKeyboardButton("继续轮询 DDNS", callback_data=f"retry_ddns_{token}"))
+    return markup
+
+
+def store_ddns_retry_state(chat_id: int, domain: str, old_ip: str, new_ip: str) -> str:
+    token = secrets.token_hex(8)
+    ddns_retry_states[token] = {
+        "chat_id": str(chat_id),
+        "domain": domain,
+        "old_ip": old_ip,
+        "new_ip": new_ip,
+    }
+    return token
+
+
+def send_ddns_retry_result(
+    chat_id: int,
+    previous_message,
+    domain: str,
+    old_ip: str,
+    new_ip: str,
+    domain_ips: list[str],
+):
+    domain_text = ", ".join(domain_ips) if domain_ips else "未解析到 A 记录"
+    if new_ip in domain_ips:
+        set_ip_change_state(
+            active=False,
+            pending_ddns=False,
+            domain=domain,
+            old_ip=old_ip,
+            new_ip=new_ip,
+        )
+        text = (
+            "<b>DDNS-GO 已刷新完成</b>\n\n"
+            f"域名：<code>{html.escape(domain)}</code>\n"
+            f"旧 IP：<code>{html.escape(str(old_ip))}</code>\n"
+            f"新 IP：<code>{html.escape(str(new_ip))}</code>\n"
+            f"当前解析：<code>{html.escape(domain_text)}</code>"
+        )
+        replace_status_message(chat_id, previous_message, text)
+        return
+
+    set_ip_change_state(
+        active=False,
+        pending_ddns=True,
+        domain=domain,
+        old_ip=old_ip,
+        new_ip=new_ip,
+    )
+    token = store_ddns_retry_state(chat_id, domain, old_ip, new_ip)
+    text = (
+        "<b>换 IP 成功，但 DDNS 解析未确认</b>\n\n"
+        f"域名：<code>{html.escape(domain)}</code>\n"
+        f"旧 IP：<code>{html.escape(str(old_ip))}</code>\n"
+        f"新 IP：<code>{html.escape(str(new_ip))}</code>\n"
+        f"当前解析：<code>{html.escape(domain_text)}</code>\n"
+        "DDNS-GO 可能还没刷新，或 DNS 缓存还没生效。"
+    )
+    delete_status_message(previous_message)
+    bot.send_message(
+        chat_id,
+        text,
+        parse_mode="HTML",
+        reply_markup=make_ddns_retry_markup(token),
+    )
+
+
+def run_ddns_retry_flow(chat_id: int, domain: str, old_ip: str, new_ip: str, status_message=None):
+    try:
+        set_ip_change_state(
+            active=False,
+            pending_ddns=True,
+            domain=domain,
+            old_ip=old_ip,
+            new_ip=new_ip,
+        )
+        status_message = replace_status_message(
+            chat_id,
+            status_message,
+            (
+                "<b>正在继续轮询 DDNS</b>\n\n"
+                f"域名：<code>{html.escape(domain)}</code>\n"
+                f"目标 IP：<code>{html.escape(str(new_ip))}</code>"
+            ),
+        )
+        _ddns_ok, domain_ips = wait_for_domain_ip(domain, str(new_ip))
+        send_ddns_retry_result(
+            chat_id,
+            status_message,
+            domain,
+            old_ip,
+            new_ip,
+            domain_ips,
+        )
+    except Exception as exc:
+        set_ip_change_state(
+            active=False,
+            pending_ddns=True,
+            domain=domain,
+            old_ip=old_ip,
+            new_ip=new_ip,
+        )
+        replace_status_message(
+            chat_id,
+            status_message,
+            f"<b>DDNS 重试异常</b>\n\n{html.escape(str(exc))}",
+        )
+
+
 def normalize_domain(value: str) -> str:
     value = (value or "").strip()
     if not value:
@@ -1219,6 +1412,85 @@ def resolve_domain_ipv4(domain: str) -> list[str]:
     return sorted(set(ips))
 
 
+def reverse_lookup_ipv4(ip: str) -> list[str]:
+    try:
+        hostname, aliases, _ips = socket.gethostbyaddr(ip)
+    except OSError:
+        return []
+    names = [hostname, *aliases]
+    cleaned = []
+    for item in names:
+        value = normalize_domain(item)
+        if value:
+            cleaned.append(value)
+    return sorted(set(cleaned))
+
+
+def send_domain_check(chat_id: int):
+    blocked = domain_check_block_reason()
+    if blocked:
+        bot.send_message(chat_id, blocked)
+        return
+    if not IP_PANEL_TOKEN:
+        bot.send_message(chat_id, "IPPanel API Token 未配置，无法查询当前最新 IP。")
+        return
+
+    ok, current_ip = api.get_current_ip()
+    if not ok:
+        bot.send_message(chat_id, f"获取当前最新 IP 失败：{current_ip}")
+        return
+
+    current_ip = str(current_ip).strip()
+    reverse_names = reverse_lookup_ipv4(current_ip)
+    reverse_text = ", ".join(reverse_names) if reverse_names else "未查询到 PTR / 反向域名"
+    domain = ddns_domain()
+
+    if not domain:
+        bot.send_message(
+            chat_id,
+            (
+                "<b>当前 IP 域名检查</b>\n\n"
+                f"当前公网 IP：<code>{html.escape(current_ip)}</code>\n"
+                f"反向解析：<code>{html.escape(reverse_text)}</code>\n"
+                "本库未配置 DDNS_DOMAIN 或 SS_PUBLIC_HOST，无法判断是否命中预期域名。"
+            ),
+            parse_mode="HTML",
+        )
+        return
+
+    if is_ipv4(domain):
+        bot.send_message(
+            chat_id,
+            (
+                "<b>当前 IP 域名检查</b>\n\n"
+                f"当前公网 IP：<code>{html.escape(current_ip)}</code>\n"
+                f"反向解析：<code>{html.escape(reverse_text)}</code>\n"
+                f"当前配置：<code>{html.escape(domain)}</code>\n"
+                "当前配置本身是 IP，不是域名，无法做 DDNS 域名一致性检查。"
+            ),
+            parse_mode="HTML",
+        )
+        return
+
+    domain_ips = resolve_domain_ipv4(domain)
+    domain_text = ", ".join(domain_ips) if domain_ips else "未解析到 A 记录"
+    matches = current_ip in domain_ips
+    result_text = "是，当前解析已命中本库设置的域名。" if matches else "否，当前解析还没有命中本库设置的域名。"
+
+    bot.send_message(
+        chat_id,
+        (
+            "<b>当前 IP 域名检查</b>\n\n"
+            f"当前公网 IP：<code>{html.escape(current_ip)}</code>\n"
+            f"反向解析：<code>{html.escape(reverse_text)}</code>\n"
+            f"本库设置域名：<code>{html.escape(domain)}</code>\n"
+            f"该域名当前 A 记录：<code>{html.escape(domain_text)}</code>\n"
+            f"检查结果：{html.escape(result_text)}"
+        ),
+        parse_mode="HTML",
+    )
+
+
 def wait_for_new_ip(old_ip: str, timeout_seconds: int = 300, interval: int = 10) -> tuple[bool, str]:
     deadline = time.monotonic() + timeout_seconds
     last_result = ""
@@ -1246,6 +1518,7 @@ def run_ip_change_flow(chat_id: int, device: dict[str, Any], status_message=None
     try:
         execute_ip_change(chat_id, device, status_message=status_message)
     except Exception as exc:
+        set_ip_change_state(active=False, pending_ddns=False)
         replace_status_message(
             chat_id,
             status_message,
@@ -1258,6 +1531,13 @@ def execute_ip_change(chat_id: int, device: dict[str, Any], status_message=None)
     domain = ddns_domain()
     should_check_ddns = should_wait_for_ddns(domain)
     old_domain_ips = resolve_domain_ipv4(domain) if should_check_ddns else []
+    set_ip_change_state(
+        active=True,
+        pending_ddns=False,
+        domain=domain,
+        old_ip=str(old_ip),
+        new_ip="",
+    )
 
     status_message = replace_status_message(
         chat_id,
@@ -1270,6 +1550,7 @@ def execute_ip_change(chat_id: int, device: dict[str, Any], status_message=None)
     )
     success, result = api.change_ip()
     if not success:
+        set_ip_change_state(active=False, pending_ddns=False, new_ip="")
         replace_status_message(
             chat_id,
             status_message,
@@ -1292,6 +1573,7 @@ def execute_ip_change(chat_id: int, device: dict[str, Any], status_message=None)
     )
     got_new_ip, new_ip = wait_for_new_ip(str(old_ip))
     if not got_new_ip:
+        set_ip_change_state(active=False, pending_ddns=False, new_ip=str(new_ip))
         replace_status_message(
             chat_id,
             status_message,
@@ -1305,6 +1587,13 @@ def execute_ip_change(chat_id: int, device: dict[str, Any], status_message=None)
         return schedule.CancelJob
 
     if not should_check_ddns:
+        set_ip_change_state(
+            active=False,
+            pending_ddns=False,
+            domain=domain,
+            old_ip=str(old_ip),
+            new_ip=str(new_ip),
+        )
         reason = (
             "未配置 DDNS_DOMAIN 或 SS_PUBLIC_HOST"
             if not domain
@@ -1337,25 +1626,25 @@ def execute_ip_change(chat_id: int, device: dict[str, Any], status_message=None)
     )
 
     ddns_ok, domain_ips = wait_for_domain_ip(domain, str(new_ip))
-    domain_text = ", ".join(domain_ips) if domain_ips else "未解析到 A 记录"
     if ddns_ok:
+        set_ip_change_state(
+            active=False,
+            pending_ddns=False,
+            domain=domain,
+            old_ip=str(old_ip),
+            new_ip=str(new_ip),
+        )
         text = (
             "<b>DDNS-GO 已刷新完成</b>\n\n"
             f"域名：<code>{html.escape(domain)}</code>\n"
             f"旧 IP：<code>{html.escape(str(old_ip))}</code>\n"
             f"新 IP：<code>{html.escape(str(new_ip))}</code>\n"
-            f"当前解析：<code>{html.escape(domain_text)}</code>"
+            f"当前解析：<code>{html.escape(', '.join(domain_ips) if domain_ips else '未解析到 A 记录')}</code>"
         )
-    else:
-        text = (
-            "<b>换 IP 成功，但 DDNS 解析未确认</b>\n\n"
-            f"域名：<code>{html.escape(domain)}</code>\n"
-            f"旧 IP：<code>{html.escape(str(old_ip))}</code>\n"
-            f"新 IP：<code>{html.escape(str(new_ip))}</code>\n"
-            f"当前解析：<code>{html.escape(domain_text)}</code>\n"
-            "DDNS-GO 可能还没刷新，或 DNS 缓存还没生效。"
-        )
-    replace_status_message(chat_id, status_message, text)
+        replace_status_message(chat_id, status_message, text)
+        return schedule.CancelJob
+
+    send_ddns_retry_result(chat_id, status_message, domain, str(old_ip), str(new_ip), domain_ips)
     return schedule.CancelJob
 
 
@@ -1450,14 +1739,8 @@ def send_quality_images(chat_id: int, png_path: Path):
 
         for idx, image_path in enumerate(generated_paths, start=1):
             caption = "当前 IP 质量双栈完整报告" if total == 1 else f"当前 IP 质量双栈完整报告（{idx}/{total}）"
-            try:
-                with image_path.open("rb") as photo:
-                    bot.send_photo(chat_id, photo, caption=caption)
-            except ApiTelegramException as exc:
-                if "PHOTO_INVALID_DIMENSIONS" not in str(exc):
-                    raise
-                with image_path.open("rb") as document:
-                    bot.send_document(chat_id, document, caption=f"{caption}（图片尺寸过大，已按文件发送）")
+            with image_path.open("rb") as document:
+                bot.send_document(chat_id, document, caption=f"{caption}（原图）", visible_file_name=image_path.name)
     except Exception as exc:
         bot.send_message(chat_id, f"IP 质量图片发送失败：{html.escape(str(exc))}")
     finally:

@@ -46,6 +46,10 @@ BG = {
 }
 
 ANSI_RE = re.compile(r"\x1b\[([0-9;?]*)([A-Za-z])")
+FONT_SIZE = 20
+LINE_GAP = 6
+PADDING_X = 18
+PADDING_Y = 16
 
 
 def char_width(ch: str) -> int:
@@ -64,6 +68,15 @@ def find_font(size: int, candidates: list[str]) -> ImageFont.FreeTypeFont:
 
 
 def load_fonts(size: int):
+    mono_cjk_candidates = [
+        "/usr/share/fonts/opentype/noto/NotoSansMonoCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansMonoCJK-Regular.ttc",
+    ]
+    for candidate in mono_cjk_candidates:
+        if Path(candidate).exists():
+            font = ImageFont.truetype(candidate, size=size)
+            return font, font
+
     ascii_font = find_font(
         size,
         [
@@ -88,6 +101,19 @@ def choose_font(ch: str, ascii_font, cjk_font):
     if char_width(ch) == 2:
         return cjk_font
     return ascii_font
+
+
+def glyph_bbox(font, text: str) -> tuple[int, int, int, int]:
+    try:
+        return font.getbbox(text)
+    except Exception:
+        mask = font.getmask(text)
+        return 0, 0, mask.size[0], mask.size[1]
+
+
+def text_pixel_width(text: str, font) -> int:
+    bbox = glyph_bbox(font, text)
+    return max(1, bbox[2] - bbox[0])
 
 
 def parse_sgr(params: str, fg, bg, bold):
@@ -200,12 +226,20 @@ def parse_ansi(text: str):
 def render(input_path: Path, output_path: Path):
     text = input_path.read_text(encoding="utf-8", errors="replace")
     lines = parse_ansi(text)
-    ascii_font, cjk_font = load_fonts(16)
+    ascii_font, cjk_font = load_fonts(FONT_SIZE)
 
-    bbox = ascii_font.getbbox("M")
-    cell_w = 9
-    cell_h = max(18, bbox[3] - bbox[1] + 6)
-    padding = 10
+    ascii_bbox = glyph_bbox(ascii_font, "M")
+    cjk_bbox = glyph_bbox(cjk_font, "测")
+    cell_w = max(
+        10,
+        text_pixel_width("M", ascii_font),
+        (text_pixel_width("测", cjk_font) + 1) // 2,
+    )
+    cell_h = max(
+        24,
+        ascii_bbox[3] - ascii_bbox[1],
+        cjk_bbox[3] - cjk_bbox[1],
+    ) + LINE_GAP
     max_cols = 1
     for line in lines:
         for x, _ch, width, _fg, _bg, _bold in line:
@@ -213,20 +247,22 @@ def render(input_path: Path, output_path: Path):
 
     image = Image.new(
         "RGB",
-        (padding * 2 + max_cols * cell_w, padding * 2 + len(lines) * cell_h),
+        (PADDING_X * 2 + max_cols * cell_w, PADDING_Y * 2 + len(lines) * cell_h),
         (0, 0, 0),
     )
     draw = ImageDraw.Draw(image)
 
     for row, line in enumerate(lines):
-        y = padding + row * cell_h
+        y = PADDING_Y + row * cell_h
         for x, ch, width, fg, bg, bold in line:
-            px = padding + x * cell_w
+            px = PADDING_X + x * cell_w
             width_px = max(1, width) * cell_w
             font = choose_font(ch, ascii_font, cjk_font)
+            glyph_w = text_pixel_width(ch, font)
+            text_x = px + max(0, (width_px - glyph_w) // 2)
             draw.rectangle([px, y, px + width_px, y + cell_h], fill=bg)
             draw.text(
-                (px, y),
+                (text_x, y),
                 ch,
                 font=font,
                 fill=fg,
