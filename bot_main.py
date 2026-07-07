@@ -115,6 +115,14 @@ def user_menu() -> ReplyKeyboardMarkup:
     return markup
 
 
+def persistent_menu_for_user(user_id: int):
+    if is_admin(user_id):
+        return reply_menu()
+    if is_ss_user(user_id):
+        return user_menu()
+    return guest_menu()
+
+
 def is_admin(user_id: int) -> bool:
     return user_id in ALLOWED_USERS
 
@@ -255,7 +263,7 @@ def send_welcome(message):
         bot.send_message(message.chat.id, "也可以在这里选择操作：", reply_markup=main_menu())
         return
     if is_ss_user(user_id):
-        bot.send_message(message.chat.id, "你的 SS 用户已启用，可发送 /my_ss 查看链接。", reply_markup=ReplyKeyboardRemove())
+        bot.send_message(message.chat.id, "你的 SS 用户已启用，可发送 /my_ss 查看链接。", reply_markup=user_menu())
         return
     bot.send_message(message.chat.id, f"你的 ID 是：{user_id}", reply_markup=guest_menu())
 
@@ -266,7 +274,7 @@ def handle_list(message):
     waiting_message = send_waiting_message(message.chat.id, "正在获取设备数据，请稍候...")
     result_text = api.get_formatted_status()
     delete_status_message(waiting_message)
-    bot.send_message(message.chat.id, result_text)
+    bot.send_message(message.chat.id, result_text, reply_markup=reply_menu())
 
 
 @bot.message_handler(commands=["ip_change"])
@@ -324,7 +332,7 @@ def handle_reply_status(message):
 @bot.message_handler(func=lambda message: message.text == BTN_DEVICES)
 @check_admin
 def handle_reply_devices(message):
-    waiting_message = send_waiting_message(message.chat.id, "正在获取当前 IP，请稍候...", reply_markup=reply_menu())
+    waiting_message = send_waiting_message(message.chat.id, "正在获取当前 IP，请稍候...")
     send_devices_for_change(message.chat.id, waiting_message=waiting_message)
 
 
@@ -334,7 +342,6 @@ def handle_reply_quality(message):
     waiting_message = send_waiting_message(
         message.chat.id,
         "正在检测当前 IP 质量，可能需要等待一分钟...",
-        reply_markup=reply_menu(),
     )
     send_ip_quality(message.chat.id, waiting_message=waiting_message)
 
@@ -401,14 +408,14 @@ def handle_reply_api_token(message):
 @bot.message_handler(func=lambda message: message.text == BTN_DOMAIN_CHECK)
 @check_admin
 def handle_reply_domain_check(message):
-    waiting_message = send_waiting_message(message.chat.id, "正在查询当前 IP 和域名解析，请稍候...", reply_markup=reply_menu())
+    waiting_message = send_waiting_message(message.chat.id, "正在查询当前 IP 和域名解析，请稍候...")
     send_domain_check(message.chat.id, waiting_message=waiting_message)
 
 
 def send_my_ss(chat_id: int, tg_user_id: int):
     user = ss_manager.get_user_by_tg(tg_user_id)
     if not user and is_admin(tg_user_id):
-        bot.send_message(chat_id, "管理员没有绑定普通 SS 用户。")
+        bot.send_message(chat_id, "管理员没有绑定普通 SS 用户。", reply_markup=persistent_menu_for_user(tg_user_id))
         return
     if not user:
         bot.send_message(chat_id, f"你还没有权限。你的 ID 是：{tg_user_id}", reply_markup=guest_menu())
@@ -417,7 +424,7 @@ def send_my_ss(chat_id: int, tg_user_id: int):
         chat_id,
         ss_manager.format_user(user, include_url=True),
         parse_mode="HTML",
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=persistent_menu_for_user(tg_user_id),
     )
 
 
@@ -427,7 +434,7 @@ def handle_ss_request(message):
         bot.send_message(message.chat.id, "你是管理员，无需申请。", reply_markup=reply_menu())
         return
     if is_ss_user(user_id):
-        bot.send_message(message.chat.id, "你已经有权限，可发送 /my_ss 查看链接。", reply_markup=ReplyKeyboardRemove())
+        bot.send_message(message.chat.id, "你已经有权限，可发送 /my_ss 查看链接。", reply_markup=user_menu())
         return
 
     username = ss_manager.parse_tg_username(message.from_user)
@@ -616,7 +623,8 @@ def send_devices_for_change(chat_id: int, call=None, waiting_message=None):
         if call:
             safe_edit(call, text, reply_markup=markup)
         else:
-            bot.send_message(chat_id, text, reply_markup=markup)
+            bot.send_message(chat_id, text, reply_markup=persistent_menu_for_user(chat_id))
+            bot.send_message(chat_id, "也可以点击下方设备按钮继续操作：", reply_markup=markup)
         return
 
     devices = api.get_devices_list()
@@ -626,7 +634,7 @@ def send_devices_for_change(chat_id: int, call=None, waiting_message=None):
         if call:
             safe_edit(call, text)
         else:
-            bot.send_message(chat_id, text)
+            bot.send_message(chat_id, text, reply_markup=persistent_menu_for_user(chat_id))
         return
 
     user_states[chat_id] = {"devices_cache": devices}
@@ -639,7 +647,8 @@ def send_devices_for_change(chat_id: int, call=None, waiting_message=None):
     if call:
         safe_edit(call, text, reply_markup=device_markup(devices))
     else:
-        bot.send_message(chat_id, text, reply_markup=device_markup(devices))
+        bot.send_message(chat_id, text, reply_markup=persistent_menu_for_user(chat_id))
+        bot.send_message(chat_id, "点击下方设备按钮后会执行换 IP：", reply_markup=device_markup(devices))
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "menu_status")
@@ -942,7 +951,7 @@ def handle_draft_actions(call):
                 bot.send_message(
                     draft.tg_user_id,
                     "你的 SS 链接已开通，可发送 /my_ss 查看。",
-                    reply_markup=ReplyKeyboardRemove(),
+                    reply_markup=user_menu(),
                 )
             except Exception:
                 pass
@@ -1444,17 +1453,17 @@ def send_domain_check(chat_id: int, waiting_message=None):
     blocked = domain_check_block_reason()
     if blocked:
         delete_status_message(waiting_message)
-        bot.send_message(chat_id, blocked)
+        bot.send_message(chat_id, blocked, reply_markup=persistent_menu_for_user(chat_id))
         return
     if not IP_PANEL_TOKEN:
         delete_status_message(waiting_message)
-        bot.send_message(chat_id, "IPPanel API Token 未配置，无法查询当前最新 IP。")
+        bot.send_message(chat_id, "IPPanel API Token 未配置，无法查询当前最新 IP。", reply_markup=persistent_menu_for_user(chat_id))
         return
 
     ok, current_ip = api.get_current_ip()
     if not ok:
         delete_status_message(waiting_message)
-        bot.send_message(chat_id, f"获取当前最新 IP 失败：{current_ip}")
+        bot.send_message(chat_id, f"获取当前最新 IP 失败：{current_ip}", reply_markup=persistent_menu_for_user(chat_id))
         return
 
     current_ip = str(current_ip).strip()
@@ -1473,6 +1482,7 @@ def send_domain_check(chat_id: int, waiting_message=None):
                 "本库未配置 DDNS_DOMAIN 或 SS_PUBLIC_HOST，无法判断是否命中预期域名。"
             ),
             parse_mode="HTML",
+            reply_markup=persistent_menu_for_user(chat_id),
         )
         return
 
@@ -1488,6 +1498,7 @@ def send_domain_check(chat_id: int, waiting_message=None):
                 "当前配置本身是 IP，不是域名，无法做 DDNS 域名一致性检查。"
             ),
             parse_mode="HTML",
+            reply_markup=persistent_menu_for_user(chat_id),
         )
         return
 
@@ -1508,6 +1519,7 @@ def send_domain_check(chat_id: int, waiting_message=None):
             f"检查结果：{html.escape(result_text)}"
         ),
         parse_mode="HTML",
+        reply_markup=persistent_menu_for_user(chat_id),
     )
 
 
