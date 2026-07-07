@@ -20,7 +20,6 @@ from telebot.types import (
     InlineKeyboardMarkup,
     KeyboardButton,
     ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
 )
 
 from api_client import IPPanelClient
@@ -86,8 +85,17 @@ def main_menu() -> InlineKeyboardMarkup:
     return markup
 
 
+def make_reply_keyboard(row_width: int) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        is_persistent=True,
+        row_width=row_width,
+    )
+
+
 def reply_menu() -> ReplyKeyboardMarkup:
-    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    markup = make_reply_keyboard(row_width=2)
     markup.add(
         KeyboardButton(BTN_STATUS),
         KeyboardButton(BTN_DEVICES),
@@ -104,13 +112,13 @@ def reply_menu() -> ReplyKeyboardMarkup:
 
 
 def guest_menu() -> ReplyKeyboardMarkup:
-    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    markup = make_reply_keyboard(row_width=1)
     markup.add(KeyboardButton(BTN_REQUEST_SS))
     return markup
 
 
 def user_menu() -> ReplyKeyboardMarkup:
-    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    markup = make_reply_keyboard(row_width=1)
     markup.add(KeyboardButton(BTN_MY_SS), KeyboardButton(BTN_CHANGE_IP))
     return markup
 
@@ -202,7 +210,7 @@ def check_permission(func: Callable[..., Any]) -> Callable[..., Any]:
             if is_call:
                 bot.answer_callback_query(message_or_call.id, text, show_alert=True)
             else:
-                bot.send_message(chat_id, text)
+                bot.send_message(chat_id, text, reply_markup=guest_menu())
             print(f"[安全] 已拦截未授权用户：{user_id}")
             return None
 
@@ -246,13 +254,17 @@ def safe_edit(call, text: str, reply_markup=None, parse_mode=None):
         return bot.send_message(
             call.message.chat.id,
             text,
-            reply_markup=reply_markup,
+            reply_markup=reply_markup or persistent_menu_for_user(call.from_user.id),
             parse_mode=parse_mode,
         )
 
 
 def send_waiting_message(chat_id: int, text: str, reply_markup=None):
-    return bot.send_message(chat_id, text, reply_markup=reply_markup)
+    return bot.send_message(
+        chat_id,
+        text,
+        reply_markup=reply_markup or persistent_menu_for_user(chat_id),
+    )
 
 
 @bot.message_handler(commands=["start", "help", "menu"])
@@ -468,7 +480,8 @@ def approval_markup(draft: ss_manager.ApprovalDraft) -> InlineKeyboardMarkup:
 
 
 def send_draft(chat_id: int, draft: ss_manager.ApprovalDraft):
-    bot.send_message(chat_id, draft.as_text(), reply_markup=approval_markup(draft))
+    bot.send_message(chat_id, draft.as_text(), reply_markup=persistent_menu_for_user(chat_id))
+    bot.send_message(chat_id, "请在这里确认或修改：", reply_markup=approval_markup(draft))
 
 
 def start_manual_create(chat_id: int, admin_id: int):
@@ -478,6 +491,7 @@ def start_manual_create(chat_id: int, admin_id: int):
         InlineKeyboardButton("创建不绑定 TG 的用户", callback_data="manual_unbound"),
         InlineKeyboardButton("输入指定 TG ID", callback_data="manual_custom"),
     )
+    bot.send_message(chat_id, "生成用户菜单已打开。", reply_markup=persistent_menu_for_user(admin_id))
     bot.send_message(chat_id, "请选择要创建的用户类型：", reply_markup=markup)
 
 
@@ -488,7 +502,7 @@ def send_method_menu(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraf
         current = "（当前）" if method == draft.method else ""
         lines.append(f"{idx}. {method}{current}")
     admin_states[admin_id] = {"mode": "draft_method_input", "draft": draft}
-    bot.send_message(chat_id, "\n".join(lines))
+    bot.send_message(chat_id, "\n".join(lines), reply_markup=persistent_menu_for_user(admin_id))
 
 
 def begin_draft_wizard(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraft):
@@ -498,17 +512,18 @@ def begin_draft_wizard(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDr
         InlineKeyboardButton("普通 SS", callback_data=f"draft_proto_ss_{draft.key}"),
         InlineKeyboardButton("SS2022", callback_data=f"draft_proto_ss2022_{draft.key}"),
     )
+    bot.send_message(chat_id, "创建向导已开始。", reply_markup=persistent_menu_for_user(admin_id))
     bot.send_message(chat_id, "请选择要创建的类型：", reply_markup=markup)
 
 
 def ask_draft_port(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraft):
     admin_states[admin_id] = {"mode": "draft_wizard_port", "draft": draft}
-    bot.send_message(chat_id, "请输入端口；发送 0 或 random 表示随机。")
+    bot.send_message(chat_id, "请输入端口；发送 0 或 random 表示随机。", reply_markup=persistent_menu_for_user(admin_id))
 
 
 def ask_draft_password(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraft):
     admin_states[admin_id] = {"mode": "draft_wizard_password", "draft": draft}
-    bot.send_message(chat_id, "请输入密码；发送 0 或 random 表示随机。")
+    bot.send_message(chat_id, "请输入密码；发送 0 或 random 表示随机。", reply_markup=persistent_menu_for_user(admin_id))
 
 
 def ask_draft_method(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraft):
@@ -521,7 +536,7 @@ def ask_draft_method(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraf
         "draft": draft,
         "methods": methods,
     }
-    bot.send_message(chat_id, "\n".join(lines))
+    bot.send_message(chat_id, "\n".join(lines), reply_markup=persistent_menu_for_user(admin_id))
 
 
 def ask_draft_duration_type(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraft):
@@ -537,12 +552,20 @@ def ask_draft_duration_type(chat_id: int, admin_id: int, draft: ss_manager.Appro
 
 def ask_draft_duration_amount(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraft, unit: str):
     admin_states[admin_id] = {"mode": "draft_wizard_duration_amount", "draft": draft, "unit": unit}
-    bot.send_message(chat_id, f"请输入数量，代表 {unit == 'month' and '几个月' or '几天'}：")
+    bot.send_message(
+        chat_id,
+        f"请输入数量，代表 {unit == 'month' and '几个月' or '几天'}：",
+        reply_markup=persistent_menu_for_user(admin_id),
+    )
 
 
 def ask_draft_traffic(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraft):
     admin_states[admin_id] = {"mode": "draft_wizard_traffic", "draft": draft}
-    bot.send_message(chat_id, "请输入流量额度，单位 GB，按单向出站计费。例如发送 100 表示 100GB。")
+    bot.send_message(
+        chat_id,
+        "请输入流量额度，单位 GB，按单向出站计费。例如发送 100 表示 100GB。",
+        reply_markup=persistent_menu_for_user(admin_id),
+    )
 
 
 def ask_draft_reset(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraft):
@@ -558,7 +581,7 @@ def ask_draft_reset(chat_id: int, admin_id: int, draft: ss_manager.ApprovalDraft
 def send_user_management(chat_id: int):
     users = ss_manager.list_users()
     if not users:
-        bot.send_message(chat_id, "暂无用户。")
+        bot.send_message(chat_id, "暂无用户。", reply_markup=persistent_menu_for_user(chat_id))
         return
     for user in users:
         markup = InlineKeyboardMarkup(row_width=2)
@@ -575,7 +598,7 @@ def send_user_management(chat_id: int):
 def send_delete_users(chat_id: int):
     users = ss_manager.list_users()
     if not users:
-        bot.send_message(chat_id, "暂无用户。")
+        bot.send_message(chat_id, "暂无用户。", reply_markup=persistent_menu_for_user(chat_id))
         return
     markup = InlineKeyboardMarkup(row_width=1)
     for user in users:
@@ -595,13 +618,14 @@ def send_notify_menu(chat_id: int):
         InlineKeyboardButton("自定义 HH:MM", callback_data="notify_custom"),
         InlineKeyboardButton("关闭通知", callback_data="notify_off"),
     )
+    bot.send_message(chat_id, "通知菜单已打开。", reply_markup=persistent_menu_for_user(chat_id))
     bot.send_message(chat_id, f"选择通知时间（北京时间）\n当前：{current}", reply_markup=markup)
 
 
 def start_bind_domain(chat_id: int, admin_id: int):
     current = ss_manager.get_public_host()
     admin_states[admin_id] = {"mode": "bind_domain_input"}
-    bot.send_message(chat_id, f"请输入要绑定的域名。\n当前：{current}")
+    bot.send_message(chat_id, f"请输入要绑定的域名。\n当前：{current}", reply_markup=persistent_menu_for_user(admin_id))
 
 
 def start_api_token_config(chat_id: int, admin_id: int):
@@ -611,6 +635,7 @@ def start_api_token_config(chat_id: int, admin_id: int):
         "请输入新的 IPPanel API Token。\n"
         "Token 会写入 .env 的 IP_PANEL_TOKEN，保存后会自动重启 Bot 服务。\n"
         f"当前：{masked_token()}",
+        reply_markup=persistent_menu_for_user(admin_id),
     )
 
 
@@ -752,6 +777,7 @@ def handle_manual_create_choice(call):
         admin_states[call.from_user.id] = {"mode": "manual_tg_id"}
         bot.answer_callback_query(call.id)
         safe_edit(call, "请输入要绑定的 TG ID；如果不需要绑定，直接发送 0 或 留空。")
+        bot.send_message(call.message.chat.id, "等待输入 TG ID。", reply_markup=persistent_menu_for_user(call.from_user.id))
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("draft_proto_"))
@@ -821,7 +847,11 @@ def handle_notify_actions(call):
     if call.data == "notify_custom":
         admin_states[call.from_user.id] = {"mode": "notify_time"}
         bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, "请输入北京时间通知时间，格式 HH:MM，例如 21:30")
+        bot.send_message(
+            call.message.chat.id,
+            "请输入北京时间通知时间，格式 HH:MM，例如 21:30",
+            reply_markup=persistent_menu_for_user(call.from_user.id),
+        )
         return
     if call.data == "notify_off":
         ss_manager.set_setting("traffic_notify_time", "")
@@ -998,7 +1028,7 @@ def handle_draft_actions(call):
         "traffic": "请输入月流量 GB，例如 100：",
     }.get(field, "请输入新值：")
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, prompt)
+    bot.send_message(call.message.chat.id, prompt, reply_markup=persistent_menu_for_user(call.from_user.id))
 
 
 @bot.callback_query_handler(
@@ -1049,7 +1079,7 @@ def handle_user_actions(call):
         "traffic": "请输入新的月流量 GB，例如 100：",
     }.get(field, "请输入新值：")
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, prompt)
+    bot.send_message(call.message.chat.id, prompt, reply_markup=persistent_menu_for_user(call.from_user.id))
 
 
 def parse_expire_value(value: str) -> str:
@@ -1074,11 +1104,11 @@ def handle_admin_state_input(message):
     try:
         if mode == "api_token_input":
             if not value:
-                bot.send_message(message.chat.id, "Token 不能为空，请重新发送。")
+                bot.send_message(message.chat.id, "Token 不能为空，请重新发送。", reply_markup=persistent_menu_for_user(message.from_user.id))
                 return
             set_env_value("IP_PANEL_TOKEN", value)
             admin_states.pop(message.from_user.id, None)
-            bot.send_message(message.chat.id, "IPPanel API Token 已保存，Bot 服务即将重启。")
+            bot.send_message(message.chat.id, "IPPanel API Token 已保存，Bot 服务即将重启。", reply_markup=persistent_menu_for_user(message.from_user.id))
             threading.Timer(2, restart_bot_service).start()
             return
 
@@ -1092,6 +1122,7 @@ def handle_admin_state_input(message):
                 message.chat.id,
                 f"确认绑定域名：<code>{html.escape(host)}</code>\n发送 YES 确认，发送其他内容取消。",
                 parse_mode="HTML",
+                reply_markup=persistent_menu_for_user(message.from_user.id),
             )
             return
 
@@ -1099,7 +1130,7 @@ def handle_admin_state_input(message):
             host = state["domain"]
             admin_states.pop(message.from_user.id, None)
             if value.lower() != "yes":
-                bot.send_message(message.chat.id, "已取消绑定域名。")
+                bot.send_message(message.chat.id, "已取消绑定域名。", reply_markup=persistent_menu_for_user(message.from_user.id))
                 return
             apply_domain_binding(message.chat.id, host)
             return
@@ -1117,7 +1148,11 @@ def handle_admin_state_input(message):
             else:
                 port = int(value)
                 if port in ss_manager.used_ports() or not ss_manager.is_port_free(port):
-                    bot.send_message(message.chat.id, "端口不可用，请重新输入；也可以发送 0 或 random 随机。")
+                    bot.send_message(
+                        message.chat.id,
+                        "端口不可用，请重新输入；也可以发送 0 或 random 随机。",
+                        reply_markup=persistent_menu_for_user(message.from_user.id),
+                    )
                     return
                 draft.port = port
             ask_draft_password(message.chat.id, message.from_user.id, draft)
@@ -1134,7 +1169,7 @@ def handle_admin_state_input(message):
             methods = state.get("methods") or ss_manager.methods_for_protocol(draft.protocol)
             index = int(value) - 1
             if index < 0 or index >= len(methods):
-                bot.send_message(message.chat.id, "序号无效，请重新输入列表中的序号。")
+                bot.send_message(message.chat.id, "序号无效，请重新输入列表中的序号。", reply_markup=persistent_menu_for_user(message.from_user.id))
                 return
             draft.method = methods[index]
             if not draft.password:
@@ -1147,7 +1182,7 @@ def handle_admin_state_input(message):
             unit = state["unit"]
             amount = int(value)
             if amount <= 0:
-                bot.send_message(message.chat.id, "数量必须大于 0，请重新输入。")
+                bot.send_message(message.chat.id, "数量必须大于 0，请重新输入。", reply_markup=persistent_menu_for_user(message.from_user.id))
                 return
             draft.expire_at = ss_manager.duration_expire_at(unit, amount)
             draft.expire_disable_enabled = 1
@@ -1158,7 +1193,7 @@ def handle_admin_state_input(message):
             draft = state["draft"]
             traffic = int(value)
             if traffic <= 0:
-                bot.send_message(message.chat.id, "流量必须大于 0，请重新输入。")
+                bot.send_message(message.chat.id, "流量必须大于 0，请重新输入。", reply_markup=persistent_menu_for_user(message.from_user.id))
                 return
             draft.traffic_limit_gb = traffic
             ask_draft_reset(message.chat.id, message.from_user.id, draft)
@@ -1169,7 +1204,7 @@ def handle_admin_state_input(message):
             methods = ss_manager.methods_for_protocol(draft.protocol)
             index = int(value) - 1
             if index < 0 or index >= len(methods):
-                bot.send_message(message.chat.id, "序号无效，请重新输入列表中的序号。")
+                bot.send_message(message.chat.id, "序号无效，请重新输入列表中的序号。", reply_markup=persistent_menu_for_user(message.from_user.id))
                 return
             draft.method = methods[index]
             admin_states[message.from_user.id] = {"mode": "draft", "draft": draft}
@@ -1187,7 +1222,7 @@ def handle_admin_state_input(message):
                     return
                 port = int(value)
                 if port in ss_manager.used_ports() or not ss_manager.is_port_free(port):
-                    bot.send_message(message.chat.id, "端口不可用，请重新输入。")
+                    bot.send_message(message.chat.id, "端口不可用，请重新输入。", reply_markup=persistent_menu_for_user(message.from_user.id))
                     return
                 draft.port = port
             elif field == "password":
@@ -1217,23 +1252,31 @@ def handle_admin_state_input(message):
             ss_manager.update_user(user_id, **updates)
             admin_states.pop(message.from_user.id, None)
             user = ss_manager.get_user(user_id)
-            bot.send_message(message.chat.id, "已更新用户：\n\n" + ss_manager.format_user(user))
+            bot.send_message(
+                message.chat.id,
+                "已更新用户：\n\n" + ss_manager.format_user(user),
+                reply_markup=persistent_menu_for_user(message.from_user.id),
+            )
             return
         if mode == "notify_time":
             datetime.strptime(value, "%H:%M")
             ss_manager.set_setting("traffic_notify_time", value)
             ss_manager.set_setting("traffic_notify_last_date", "")
             admin_states.pop(message.from_user.id, None)
-            bot.send_message(message.chat.id, f"TG 流量通知时间已设置为北京时间：{value}")
+            bot.send_message(
+                message.chat.id,
+                f"TG 流量通知时间已设置为北京时间：{value}",
+                reply_markup=persistent_menu_for_user(message.from_user.id),
+            )
             return
     except Exception as exc:
-        bot.send_message(message.chat.id, f"输入无效：{exc}")
+        bot.send_message(message.chat.id, f"输入无效：{exc}", reply_markup=persistent_menu_for_user(message.from_user.id))
 
 
 def apply_domain_binding(chat_id: int, host: str):
     ss_manager.bind_public_host(host)
     success_text = "域名更新成功，所有链接已更新。"
-    bot.send_message(chat_id, success_text)
+    bot.send_message(chat_id, success_text, reply_markup=persistent_menu_for_user(chat_id))
     notify_domain_update(success_text)
     threading.Timer(2, restart_bot_service).start()
 
@@ -1242,7 +1285,7 @@ def notify_domain_update(title: str):
     users = ss_manager.list_users()
     if not users:
         for admin_id in ALLOWED_USERS:
-            bot.send_message(admin_id, title)
+            bot.send_message(admin_id, title, reply_markup=persistent_menu_for_user(admin_id))
         return
 
     for user in users:
@@ -1251,7 +1294,7 @@ def notify_domain_update(title: str):
         targets = [int(tg_user_id)] if tg_user_id else ALLOWED_USERS
         for target in targets:
             try:
-                bot.send_message(target, text, parse_mode="HTML")
+                bot.send_message(target, text, parse_mode="HTML", reply_markup=persistent_menu_for_user(target))
             except Exception:
                 pass
 
@@ -1271,7 +1314,7 @@ def delete_status_message(message) -> None:
 
 def replace_status_message(chat_id: int, previous_message, text: str):
     delete_status_message(previous_message)
-    return bot.send_message(chat_id, text, parse_mode="HTML")
+    return bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=persistent_menu_for_user(chat_id))
 
 
 def make_ddns_retry_markup(token: str) -> InlineKeyboardMarkup:
@@ -1339,6 +1382,11 @@ def send_ddns_retry_result(
         chat_id,
         text,
         parse_mode="HTML",
+        reply_markup=persistent_menu_for_user(chat_id),
+    )
+    bot.send_message(
+        chat_id,
+        "如果 DDNS 还没生效，可以继续轮询：",
         reply_markup=make_ddns_retry_markup(token),
     )
 
@@ -1683,7 +1731,7 @@ def execute_ip_change(chat_id: int, device: dict[str, Any], status_message=None)
 def send_ip_quality(chat_id: int, waiting_message=None):
     if not MONITOR_SCRIPT.exists():
         delete_status_message(waiting_message)
-        bot.send_message(chat_id, f"未找到检测脚本：{MONITOR_SCRIPT}")
+        bot.send_message(chat_id, f"未找到检测脚本：{MONITOR_SCRIPT}", reply_markup=persistent_menu_for_user(chat_id))
         return
 
     try:
@@ -1696,11 +1744,11 @@ def send_ip_quality(chat_id: int, waiting_message=None):
         )
     except FileNotFoundError:
         delete_status_message(waiting_message)
-        bot.send_message(chat_id, "未找到 bash，请在 Linux VPS 上运行。")
+        bot.send_message(chat_id, "未找到 bash，请在 Linux VPS 上运行。", reply_markup=persistent_menu_for_user(chat_id))
         return
     except subprocess.TimeoutExpired:
         delete_status_message(waiting_message)
-        bot.send_message(chat_id, "IP 质量检测超时（超过 10 分钟）。")
+        bot.send_message(chat_id, "IP 质量检测超时（超过 10 分钟）。", reply_markup=persistent_menu_for_user(chat_id))
         return
 
     if result.returncode != 0:
@@ -1718,19 +1766,19 @@ def send_ip_quality(chat_id: int, waiting_message=None):
         output = (result.stderr or result.stdout or "检测脚本没有返回错误详情。").strip()
         output = f"{output}{log_tail}"
         delete_status_message(waiting_message)
-        bot.send_message(chat_id, f"IP 质量检测失败：\n{output[-3500:]}")
+        bot.send_message(chat_id, f"IP 质量检测失败：\n{output[-3500:]}", reply_markup=persistent_menu_for_user(chat_id))
         return
 
     output_lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     if not output_lines:
         delete_status_message(waiting_message)
-        bot.send_message(chat_id, "IP 质量检测已结束，但检测脚本没有返回图片路径。")
+        bot.send_message(chat_id, "IP 质量检测已结束，但检测脚本没有返回图片路径。", reply_markup=persistent_menu_for_user(chat_id))
         return
 
     png_path = Path(output_lines[-1])
     if not png_path.exists():
         delete_status_message(waiting_message)
-        bot.send_message(chat_id, "IP 质量检测已结束，但未生成 PNG 图片。")
+        bot.send_message(chat_id, "IP 质量检测已结束，但未生成 PNG 图片。", reply_markup=persistent_menu_for_user(chat_id))
         return
 
     delete_status_message(waiting_message)
@@ -1779,9 +1827,15 @@ def send_quality_images(chat_id: int, png_path: Path):
         for idx, image_path in enumerate(generated_paths, start=1):
             caption = "当前 IP 质量双栈完整报告" if total == 1 else f"当前 IP 质量双栈完整报告（{idx}/{total}）"
             with image_path.open("rb") as document:
-                bot.send_document(chat_id, document, caption=f"{caption}（原图）", visible_file_name=image_path.name)
+                bot.send_document(
+                    chat_id,
+                    document,
+                    caption=f"{caption}（原图）",
+                    visible_file_name=image_path.name,
+                    reply_markup=persistent_menu_for_user(chat_id),
+                )
     except Exception as exc:
-        bot.send_message(chat_id, f"IP 质量图片发送失败：{html.escape(str(exc))}")
+        bot.send_message(chat_id, f"IP 质量图片发送失败：{html.escape(str(exc))}", reply_markup=persistent_menu_for_user(chat_id))
     finally:
         for path in [png_path, *generated_paths]:
             try:
@@ -1814,7 +1868,7 @@ def send_scheduled_traffic_report():
     report = ss_manager.traffic_report()
     for admin_id in ALLOWED_USERS:
         try:
-            bot.send_message(admin_id, report)
+            bot.send_message(admin_id, report, reply_markup=persistent_menu_for_user(admin_id))
         except Exception:
             pass
     ss_manager.set_setting("traffic_notify_last_date", today)
