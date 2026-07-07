@@ -138,6 +138,12 @@ render_png() {
   "$PYTHON_BIN" "$SCRIPT_DIR/scripts/render_ansi_png.py" "$ansi_file" "$png_file"
 }
 
+extract_quality_sections() {
+  local input_file="$1"
+  local output_file="$2"
+  "$PYTHON_BIN" "$SCRIPT_DIR/scripts/extract_quality_sections.py" "$input_file" "$output_file"
+}
+
 send_telegram() {
   local old_ip="$1"
   local current_ip="$2"
@@ -151,7 +157,7 @@ send_telegram() {
   curl -fsS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendPhoto" \
     -F chat_id="${TG_CHAT_ID}" \
     -F parse_mode="HTML" \
-    -F caption="<b>IP 质量双栈完整报告</b>
+    -F caption="<b>IP 质量报告</b>
 旧 IP：<code>${old_ip:-无}</code>
 新 IP：<code>${current_ip}</code>
 时间：$(date '+%Y-%m-%d %H:%M:%S')
@@ -182,6 +188,7 @@ printf '%s\n' "$CURRENT_IP" > "$IP_LOG_FILE"
 log "IP 已变化或强制检测：${LAST_IP:-无} -> $CURRENT_IP"
 
 TEMP_DIR="$(mktemp -d)"
+RAW_ANSI_FILE="${TEMP_DIR}/ipquality_raw.ansi"
 ANSI_FILE="${TEMP_DIR}/ipquality.ansi"
 RUN_LOG_FILE="$(mktemp)"
 PNG_FILE="${IMAGE_DIR}/ip_quality_$(date '+%Y%m%d_%H%M%S').png"
@@ -195,13 +202,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-log "执行 https://IP.Check.Place 双栈完整检测，并输出最终 ANSI 报告"
+log "执行 IP.Check.Place / IPQuality 主报告检测，并输出最终 ANSI 报告"
 set +e
-bash <(curl -fsSL https://IP.Check.Place) -o "$ANSI_FILE" > "$RUN_LOG_FILE" 2>&1
+bash <(curl -fsSL https://IP.Check.Place) -o "$RAW_ANSI_FILE" > "$RUN_LOG_FILE" 2>&1
 CHECK_STATUS=$?
 set -e
 
-if [ ! -s "$ANSI_FILE" ]; then
+if [ ! -s "$RAW_ANSI_FILE" ]; then
   echo "IP.Check.Place 未生成最终 ANSI 报告。" >&2
   if [ "$CHECK_STATUS" -ne 0 ]; then
     echo "远程检测脚本退出码：$CHECK_STATUS" >&2
@@ -213,6 +220,18 @@ fi
 
 if [ "$CHECK_STATUS" -ne 0 ]; then
   log "IP.Check.Place 退出码为 $CHECK_STATUS，但已生成最终 ANSI 报告，继续生成图片。"
+fi
+
+if ! extract_quality_sections "$RAW_ANSI_FILE" "$ANSI_FILE"; then
+  echo "提取 IP 质量主报告失败。" >&2
+  tail -n 80 "$RAW_ANSI_FILE" >&2 || true
+  exit 1
+fi
+
+if [ ! -s "$ANSI_FILE" ]; then
+  echo "提取后的 IP 质量主报告为空。" >&2
+  tail -n 80 "$RAW_ANSI_FILE" >&2 || true
+  exit 1
 fi
 
 if ! render_png "$ANSI_FILE" "$PNG_FILE"; then

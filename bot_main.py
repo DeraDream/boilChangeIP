@@ -243,6 +243,10 @@ def safe_edit(call, text: str, reply_markup=None, parse_mode=None):
         )
 
 
+def send_waiting_message(chat_id: int, text: str, reply_markup=None):
+    return bot.send_message(chat_id, text, reply_markup=reply_markup)
+
+
 @bot.message_handler(commands=["start", "help", "menu"])
 def send_welcome(message):
     user_id = message.from_user.id
@@ -259,14 +263,17 @@ def send_welcome(message):
 @bot.message_handler(commands=["list"])
 @check_admin
 def handle_list(message):
-    bot.reply_to(message, "正在获取设备数据，请稍候...")
-    bot.send_message(message.chat.id, api.get_formatted_status())
+    waiting_message = send_waiting_message(message.chat.id, "正在获取设备数据，请稍候...")
+    result_text = api.get_formatted_status()
+    delete_status_message(waiting_message)
+    bot.send_message(message.chat.id, result_text)
 
 
 @bot.message_handler(commands=["ip_change"])
 @check_admin
 def handle_ip_change(message):
-    send_devices_for_change(message.chat.id)
+    waiting_message = send_waiting_message(message.chat.id, "正在获取当前 IP，请稍候...")
+    send_devices_for_change(message.chat.id, waiting_message=waiting_message)
 
 
 @bot.message_handler(commands=["api_token"])
@@ -317,18 +324,19 @@ def handle_reply_status(message):
 @bot.message_handler(func=lambda message: message.text == BTN_DEVICES)
 @check_admin
 def handle_reply_devices(message):
-    send_devices_for_change(message.chat.id)
+    waiting_message = send_waiting_message(message.chat.id, "正在获取当前 IP，请稍候...", reply_markup=reply_menu())
+    send_devices_for_change(message.chat.id, waiting_message=waiting_message)
 
 
 @bot.message_handler(func=lambda message: message.text == BTN_QUALITY)
 @check_admin
 def handle_reply_quality(message):
-    bot.send_message(
+    waiting_message = send_waiting_message(
         message.chat.id,
         "正在检测当前 IP 质量，可能需要等待一分钟...",
         reply_markup=reply_menu(),
     )
-    send_ip_quality(message.chat.id)
+    send_ip_quality(message.chat.id, waiting_message=waiting_message)
 
 
 @bot.message_handler(commands=["my_ss"])
@@ -393,7 +401,8 @@ def handle_reply_api_token(message):
 @bot.message_handler(func=lambda message: message.text == BTN_DOMAIN_CHECK)
 @check_admin
 def handle_reply_domain_check(message):
-    send_domain_check(message.chat.id)
+    waiting_message = send_waiting_message(message.chat.id, "正在查询当前 IP 和域名解析，请稍候...", reply_markup=reply_menu())
+    send_domain_check(message.chat.id, waiting_message=waiting_message)
 
 
 def send_my_ss(chat_id: int, tg_user_id: int):
@@ -598,8 +607,9 @@ def start_api_token_config(chat_id: int, admin_id: int):
     )
 
 
-def send_devices_for_change(chat_id: int, call=None):
+def send_devices_for_change(chat_id: int, call=None, waiting_message=None):
     if not IP_PANEL_TOKEN:
+        delete_status_message(waiting_message)
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton(BTN_API_TOKEN, callback_data="menu_api_token"))
         text = "IPPanel API Token 未配置。请先配置 Token 后再获取当前 IP。"
@@ -611,6 +621,7 @@ def send_devices_for_change(chat_id: int, call=None):
 
     devices = api.get_devices_list()
     if not devices:
+        delete_status_message(waiting_message)
         text = "未获取到当前 IP，请检查 IPPanel API Token 是否正确。"
         if call:
             safe_edit(call, text)
@@ -624,6 +635,7 @@ def send_devices_for_change(chat_id: int, call=None):
         lines.append(f"{idx}. {dev['name']}")
         lines.append(f"   当前 IP：{dev['current_ip']}")
     text = "\n".join(lines)
+    delete_status_message(waiting_message)
     if call:
         safe_edit(call, text, reply_markup=device_markup(devices))
     else:
@@ -641,15 +653,16 @@ def handle_menu_status(call):
 @check_admin
 def handle_menu_devices(call):
     bot.answer_callback_query(call.id, "正在获取设备...")
-    send_devices_for_change(call.message.chat.id, call=call)
+    waiting_message = send_waiting_message(call.message.chat.id, "正在获取当前 IP，请稍候...")
+    send_devices_for_change(call.message.chat.id, call=call, waiting_message=waiting_message)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "menu_quality")
 @check_admin
 def handle_menu_quality(call):
     bot.answer_callback_query(call.id, "正在检测 IP 质量...")
-    safe_edit(call, "正在检测当前 IP 质量，可能需要等待一分钟...")
-    send_ip_quality(call.message.chat.id)
+    waiting_message = send_waiting_message(call.message.chat.id, "正在检测当前 IP 质量，可能需要等待一分钟...")
+    send_ip_quality(call.message.chat.id, waiting_message=waiting_message)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "menu_create_user")
@@ -702,8 +715,8 @@ def handle_menu_domain_check(call):
         bot.answer_callback_query(call.id, blocked, show_alert=True)
         return
     bot.answer_callback_query(call.id, "正在查询最新域名解析...")
-    safe_edit(call, "正在查询当前 IP 和域名解析，请稍候...")
-    send_domain_check(call.message.chat.id)
+    waiting_message = send_waiting_message(call.message.chat.id, "正在查询当前 IP 和域名解析，请稍候...")
+    send_domain_check(call.message.chat.id, waiting_message=waiting_message)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("manual_"))
@@ -817,7 +830,8 @@ def handle_notify_actions(call):
 @check_ss_or_admin
 def handle_user_change_ip(call):
     bot.answer_callback_query(call.id, "正在获取设备...")
-    send_devices_for_change(call.message.chat.id, call=call)
+    waiting_message = send_waiting_message(call.message.chat.id, "正在获取当前 IP，请稍候...")
+    send_devices_for_change(call.message.chat.id, call=call, waiting_message=waiting_message)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("retry_ddns_"))
@@ -1426,17 +1440,20 @@ def reverse_lookup_ipv4(ip: str) -> list[str]:
     return sorted(set(cleaned))
 
 
-def send_domain_check(chat_id: int):
+def send_domain_check(chat_id: int, waiting_message=None):
     blocked = domain_check_block_reason()
     if blocked:
+        delete_status_message(waiting_message)
         bot.send_message(chat_id, blocked)
         return
     if not IP_PANEL_TOKEN:
+        delete_status_message(waiting_message)
         bot.send_message(chat_id, "IPPanel API Token 未配置，无法查询当前最新 IP。")
         return
 
     ok, current_ip = api.get_current_ip()
     if not ok:
+        delete_status_message(waiting_message)
         bot.send_message(chat_id, f"获取当前最新 IP 失败：{current_ip}")
         return
 
@@ -1446,6 +1463,7 @@ def send_domain_check(chat_id: int):
     domain = ddns_domain()
 
     if not domain:
+        delete_status_message(waiting_message)
         bot.send_message(
             chat_id,
             (
@@ -1459,6 +1477,7 @@ def send_domain_check(chat_id: int):
         return
 
     if is_ipv4(domain):
+        delete_status_message(waiting_message)
         bot.send_message(
             chat_id,
             (
@@ -1477,6 +1496,7 @@ def send_domain_check(chat_id: int):
     matches = current_ip in domain_ips
     result_text = "是，当前解析已命中本库设置的域名。" if matches else "否，当前解析还没有命中本库设置的域名。"
 
+    delete_status_message(waiting_message)
     bot.send_message(
         chat_id,
         (
@@ -1648,8 +1668,9 @@ def execute_ip_change(chat_id: int, device: dict[str, Any], status_message=None)
     return schedule.CancelJob
 
 
-def send_ip_quality(chat_id: int):
+def send_ip_quality(chat_id: int, waiting_message=None):
     if not MONITOR_SCRIPT.exists():
+        delete_status_message(waiting_message)
         bot.send_message(chat_id, f"未找到检测脚本：{MONITOR_SCRIPT}")
         return
 
@@ -1662,9 +1683,11 @@ def send_ip_quality(chat_id: int):
             timeout=180,
         )
     except FileNotFoundError:
+        delete_status_message(waiting_message)
         bot.send_message(chat_id, "未找到 bash，请在 Linux VPS 上运行。")
         return
     except subprocess.TimeoutExpired:
+        delete_status_message(waiting_message)
         bot.send_message(chat_id, "IP 质量检测超时。")
         return
 
@@ -1682,19 +1705,23 @@ def send_ip_quality(chat_id: int):
 
         output = (result.stderr or result.stdout or "检测脚本没有返回错误详情。").strip()
         output = f"{output}{log_tail}"
+        delete_status_message(waiting_message)
         bot.send_message(chat_id, f"IP 质量检测失败：\n{output[-3500:]}")
         return
 
     output_lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     if not output_lines:
+        delete_status_message(waiting_message)
         bot.send_message(chat_id, "IP 质量检测已结束，但检测脚本没有返回图片路径。")
         return
 
     png_path = Path(output_lines[-1])
     if not png_path.exists():
+        delete_status_message(waiting_message)
         bot.send_message(chat_id, "IP 质量检测已结束，但未生成 PNG 图片。")
         return
 
+    delete_status_message(waiting_message)
     send_quality_images(chat_id, png_path)
 
 
